@@ -133,7 +133,9 @@ jobs:
           out="gmc-${{ steps.personal.outputs.version }}.apk"
           cp "${apks[0]}" "$out"
           # Fail if the APK ended up debug-signed: it could never update the installed app.
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$out" | tee certs.txt
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          [ -n "$apksigner" ] || { echo "::error::apksigner not found"; exit 1; }
+          "$apksigner" verify --print-certs "$out" | tee certs.txt
           if grep -qi "Android Debug" certs.txt; then
             echo "::error::APK is debug-signed; check KEYSTORE_BASE64/KEYSTORE_PASSWORD"
             exit 1
