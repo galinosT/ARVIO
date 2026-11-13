@@ -116,7 +116,9 @@ internal fun repairTruncatedArray(text: String): JSONArray? {
 
 class SubtitleTranslationService(
     private val apiKeyProvider: () -> String,
-    private val modelProvider: () -> SubtitleAiModel = { SubtitleAiModel.GROQ_LLAMA_70B }
+    private val modelProvider: () -> SubtitleAiModel = { SubtitleAiModel.GROQ_LLAMA_70B },
+    // GMC: a Claude key here routes subtitle translation to Claude Haiku (see GmcClaude.kt).
+    private val claudeKeyProvider: () -> String = { "" }
 ) {
 
     private val client = OkHttpClient.Builder()
@@ -322,13 +324,14 @@ class SubtitleTranslationService(
         depth: Int
     ): TranslationResult {
         if (lines.isEmpty()) return TranslationResult(lines, true)
+        val claudeKey = claudeKeyProvider()
         val apiKey = apiKeyProvider()
-        if (apiKey.isBlank()) {
+        if (apiKey.isBlank() && claudeKey.isBlank()) {
             Log.e(TAG, "API key is blank — translation skipped")
             return TranslationResult(lines, false, "API key missing")
         }
 
-        val result = when (modelProvider()) {
+        val result = if (claudeKey.isNotBlank()) translateClaude(lines, targetLanguage, claudeKey) else when (modelProvider()) {
             SubtitleAiModel.GROQ_LLAMA_70B -> translateGroq(lines, targetLanguage, apiKey)
             SubtitleAiModel.GEMINI_FLASH_25 -> translateGemini(lines, targetLanguage, apiKey)
         }
@@ -408,6 +411,30 @@ class SubtitleTranslationService(
 
                 Log.e(TAG, "translateGroq exception: ${e.message}", e)
                 TranslationResult(lines, false, e.message)
+            }
+        }
+    }
+
+    /** GMC: the Gemini request's prompt and batch, sent to Claude Haiku (transport in GmcClaude.kt). */
+    private suspend fun translateClaude(
+        lines: List<String>,
+        targetLanguage: String,
+        apiKey: String,
+        attempt: Int = 0
+    ): TranslationResult {
+        val NL = "⏎"
+        val userText = "Translate to $targetLanguage:\n${encodeIndexed(lines, NL)}"
+        return when (val reply = claudeTranslateCall(client, apiKey, buildSystemPrompt(targetLanguage, NL), userText)) {
+            is ClaudeReply.Refused -> TranslationResult(lines, false, TRANSLATION_ERROR_CONTENT_BLOCKED)
+            is ClaudeReply.Failed -> TranslationResult(lines, false, reply.message)
+            is ClaudeReply.Text -> {
+                val parsed = parseTranslationResult(lines, targetLanguage, reply.text, NL)
+                if (!parsed.success && attempt == 0) {
+                    Log.w(TAG, "Claude parse failed (${parsed.errorMessage}) — retrying batch once")
+                    translateClaude(lines, targetLanguage, apiKey, attempt = 1)
+                } else {
+                    parsed
+                }
             }
         }
     }

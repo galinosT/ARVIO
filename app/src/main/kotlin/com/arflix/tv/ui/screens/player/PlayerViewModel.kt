@@ -512,7 +512,8 @@ class PlayerViewModel @Inject constructor(
     /** Shared with [translationManager]; also used directly for AI subtitle line-matching. */
     private val translationService = SubtitleTranslationService(
         apiKeyProvider = { aiApiKey },
-        modelProvider = { aiModel }
+        modelProvider = { aiModel },
+        claudeKeyProvider = { com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs.activeKey(context) }
     )
 
     val translationManager: SubtitleTranslationManager = SubtitleTranslationManager(

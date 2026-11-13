@@ -339,7 +339,7 @@ internal fun tvGeneralRowsForSection(section: String): List<Int> {
         "subtitles" -> listOf(4, 5, 6, 7, 42, 8, 38) +
             (if (BuildConfig.AUDIO_SYNC_AVAILABLE) listOf(48) else emptyList()) +
             listOf(39, 9, 45)
-        "ai_subtitles" -> listOf(28, 29, 30, 31, 32, 33) + LIVE_AI_SUBS_ROWS
+        "ai_subtitles" -> listOf(28, 29, 30, 31, 32, 33) + LIVE_AI_SUBS_ROWS + GMC_CLAUDE_ROWS
         "playback" -> listOf(10, 11, 12, 43, 44, 13, 14, 34, 37, 16, 15, 40, 27, 53, 54)
         "appearance" -> listOf(17, 49, 50, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47)
         "profiles" -> listOf(19)
@@ -1500,6 +1500,7 @@ fun SettingsScreen(
                                                 32 -> showAiApiKeyDialog = true
                                                 33 -> viewModel.startAiKeyServer()
                                                 51, 52 -> onLiveAiSubsRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
+                                                60, 61 -> onGmcClaudeRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
                                                 34 -> viewModel.cycleTrailerDelay()
                                                 47 -> viewModel.cycleGuideRowCount()
                                                 37 -> viewModel.setTrailerInCards(!uiState.trailerInCards)
@@ -5594,6 +5595,7 @@ private fun MobileSettingsSubPage(
                         onClick = onSubtitleAiQrClick
                     )
                     LiveAiSubsMobileRows()
+                    GmcClaudeMobileRows()
                     if (uiState.subtitleAiEnabled) {
                         Text(
                             text = when (uiState.subtitleAiModel) {
@@ -7065,6 +7067,7 @@ private fun TvGeneralSettingsRows(
                     modifier = Modifier.settingsFocusSlot(localIndex)
                 )
                 in LIVE_AI_SUBS_ROWS -> LiveAiSubsTvRow(rowId, focusedIndex == localIndex, Modifier.settingsFocusSlot(localIndex))
+                in GMC_CLAUDE_ROWS -> GmcClaudeTvRow(rowId, focusedIndex == localIndex, Modifier.settingsFocusSlot(localIndex))
             }
         }
     }
