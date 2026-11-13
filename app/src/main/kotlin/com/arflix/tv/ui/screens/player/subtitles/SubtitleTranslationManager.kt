@@ -60,9 +60,12 @@ class SubtitleTranslationManager(
     }
 
     fun updateService(apiKey: String, model: SubtitleAiModel) {
+        // GMC: keep the Claude key provider. Rebuilding the service without it (this runs every
+        // time the player loads its settings) silently sent every translation back to Gemini.
         service = SubtitleTranslationService(
             apiKeyProvider = { apiKey },
-            modelProvider = { model }
+            modelProvider = { model },
+            claudeKeyProvider = service.claudeKeyProvider
         )
     }
 

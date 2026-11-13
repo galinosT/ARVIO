@@ -118,7 +118,7 @@ class SubtitleTranslationService(
     private val apiKeyProvider: () -> String,
     private val modelProvider: () -> SubtitleAiModel = { SubtitleAiModel.GROQ_LLAMA_70B },
     // GMC: a Claude key here routes subtitle translation to Claude Haiku (see GmcClaude.kt).
-    private val claudeKeyProvider: () -> String = { "" }
+    internal val claudeKeyProvider: () -> String = { "" }
 ) {
 
     private val client = OkHttpClient.Builder()
