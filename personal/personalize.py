@@ -16,8 +16,8 @@ What it changes:
   - skips the release check that demands the official Telegram/cloud credentials
 
 Environment:
-  PERSONAL_PACKAGE   package name             (default com.galinos.arvio)
-  PERSONAL_APP_NAME  launcher name            (default ARVIO G)
+  PERSONAL_PACKAGE   package name             (default com.galinos.gmc)
+  PERSONAL_APP_NAME  launcher name            (default GMC)
   PERSONAL_BUILD     build number, required   (the workflow passes github.run_number)
   GITHUB_REPOSITORY  owner/repo for updates   (set by GitHub Actions)
 """
@@ -42,8 +42,8 @@ def replace_once(text, old, new, what):
 
 
 def main():
-    package = os.environ.get("PERSONAL_PACKAGE", "com.galinos.arvio")
-    app_name = os.environ.get("PERSONAL_APP_NAME", "ARVIO G")
+    package = os.environ.get("PERSONAL_PACKAGE", "com.galinos.gmc")
+    app_name = os.environ.get("PERSONAL_APP_NAME", "GMC")
     build = os.environ.get("PERSONAL_BUILD", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not build.isdigit() or not 0 < int(build) < 1000:

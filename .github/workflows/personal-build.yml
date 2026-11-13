@@ -63,7 +63,7 @@ jobs:
           keytool -genkeypair -keystore personal.jks -storetype PKCS12 \
             -alias personal -keyalg RSA -keysize 4096 -validity 36500 \
             -storepass "$pass" -keypass "$pass" \
-            -dname "CN=ARVIO G personal build" >/dev/null 2>&1
+            -dname "CN=GMC personal build" >/dev/null 2>&1
           base64 -w0 personal.jks > keystore-out/KEYSTORE_BASE64.txt
           printf '%s' "$pass" > keystore-out/KEYSTORE_PASSWORD.txt
           cp personal.jks keystore-out/personal.jks
@@ -130,7 +130,7 @@ jobs:
             echo "::error::Expected one APK, found ${#apks[@]}: ${apks[*]}"
             exit 1
           fi
-          out="arvio-g-${{ steps.personal.outputs.version }}.apk"
+          out="gmc-${{ steps.personal.outputs.version }}.apk"
           cp "${apks[0]}" "$out"
           # Fail if the APK ended up debug-signed: it could never update the installed app.
           "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$out" | tee certs.txt
@@ -149,5 +149,5 @@ jobs:
           gh release create "v$VERSION" "$APK" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "ARVIO G $VERSION" \
+            --title "GMC $VERSION" \
             --notes "Personal build of $(git log -1 --format='%h %s')."

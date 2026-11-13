@@ -1,7 +1,7 @@
-# ARVIO G: personal build of this fork
+# GMC (Galinos Media Center): personal build of ARVIO
 
 This branch (`galinos`) is ARVIO plus personal changes, built as a separate app
-(`com.galinos.arvio`, launcher name "ARVIO G") that installs next to the official one.
+(`com.galinos.gmc`, launcher name "GMC") that installs next to the official one.
 
 - `main` mirrors ProdigyV21/ARVIO. Use "Sync fork" on GitHub to update it.
 - `galinos` = `main` + personal changes. After syncing `main`, merge `main` into `galinos`.
