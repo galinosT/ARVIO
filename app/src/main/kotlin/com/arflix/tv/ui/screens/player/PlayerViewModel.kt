@@ -527,6 +527,7 @@ class PlayerViewModel @Inject constructor(
                 com.arflix.tv.ui.screens.player.subtitles.GmcGlossary.Title(
                     key = (if (currentMediaType == MediaType.MOVIE) "movie:" else "tv:") + id,
                     name = currentTitle,
+                    episode = if (currentMediaType == MediaType.MOVIE) "" else "s${currentSeason ?: 0}e${currentEpisode ?: 0}",
                 )
             }
         }

@@ -22,6 +22,8 @@ class SubtitleTranslationManager(
 ) {
     companion object {
         const val MOCK_MODE = false
+        /** GMC: marks an episode whose lines are already in the glossary. */
+        private const val DONE = "\u0000gmc-glossary-done"
         // Groq free tier: 30 RPM. Subtitles change every 2-4s naturally (~15-20 RPM).
         // No artificial rate limit needed — just don't fire concurrent requests.
         // If we get a 429, we back off 5s.
@@ -262,13 +264,14 @@ class SubtitleTranslationManager(
 
     @Volatile private var glossaryKey: String? = null
     @Volatile private var glossaryText: String = ""
-    @Volatile private var glossaryBuildTried = false
+    @Volatile private var glossaryEpisode: String? = null
     private val glossarySource = java.util.Collections.synchronizedList(mutableListOf<String>())
 
     /**
      * Puts the current title's glossary on the service before a Claude batch: loaded once per title,
-     * and when there is none, built in the background from the first [GmcGlossary.LINES_TO_BUILD]
-     * English lines seen. Gemini/Groq batches are left exactly as they were.
+     * then, once per episode, built (first episode) or extended with that episode's new names from the
+     * first [GmcGlossary.LINES_TO_BUILD] English lines seen — in the background, so no batch waits.
+     * Gemini/Groq batches are left exactly as they were.
      */
     private suspend fun prepareGlossary(texts: List<String>) {
         val context = gmcContext ?: return
@@ -281,8 +284,6 @@ class SubtitleTranslationManager(
         val key = "${title.key}|${lang.lowercase()}"
         if (key != glossaryKey) {
             glossaryKey = key
-            glossaryBuildTried = false
-            glossarySource.clear()
             glossaryText = try {
                 GmcGlossary.load(context, title, lang)
             } catch (e: CancellationException) {
@@ -291,15 +292,23 @@ class SubtitleTranslationManager(
                 ""
             }
         }
-        if (glossaryText.isBlank() && !glossaryBuildTried) {
+        val episode = "$key|${title.episode}"
+        if (episode != glossaryEpisode) {
+            glossaryEpisode = episode
+            glossarySource.clear()
+            if (GmcGlossary.episodeDone(context, title, lang)) glossarySource.add(DONE)
+        }
+        if (glossarySource.firstOrNull() != DONE) {
             if (glossarySource.size < GmcGlossary.LINES_TO_BUILD) glossarySource.addAll(texts)
             if (glossarySource.size >= GmcGlossary.LINES_TO_BUILD) {
-                glossaryBuildTried = true
                 val lines = glossarySource.toList()
+                glossarySource.clear()
+                glossarySource.add(DONE)
                 val builder = service
+                val existing = glossaryText
                 scope.launch {
                     val built = try {
-                        GmcGlossary.build(context, builder, title, lang, lines)
+                        GmcGlossary.build(context, builder, title, lang, lines, existing)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
