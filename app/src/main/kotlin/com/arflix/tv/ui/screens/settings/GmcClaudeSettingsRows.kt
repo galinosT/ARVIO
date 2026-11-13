@@ -50,7 +50,7 @@ import com.arflix.tv.ui.theme.TextSecondary
  */
 
 /** TV settings row indices, after the existing ones (0–54). */
-internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62)
+internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63, 64)
 
 private const val TITLE_SWITCH = "Claude Haiku (GMC)"
 private const val DESC_SWITCH =
@@ -66,7 +66,7 @@ private var showStatsDialog by mutableStateOf(false)
 private const val TITLE_STATS = "Στατιστικά συγχρονισμού (GMC)"
 private const val DESC_STATS = "Πόσες φορές μπήκε μετάφραση AI με τους κανόνες του GMC και πόσες θα έμπαινε στο αρχικό ARVIO."
 
-private fun toast(context: Context, text: String) {
+internal fun gmcToast(context: Context, text: String) {
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 }
 
@@ -76,7 +76,7 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
         60 -> {
             val enable = !GmcClaudePrefs.isEnabled(context)
             if (enable && !GmcClaudePrefs.looksLikeKey(GmcClaudePrefs.apiKey(context))) {
-                toast(context, "Βάλε πρώτα κλειδί Claude")
+                gmcToast(context, "Βάλε πρώτα κλειδί Claude")
                 showKeyDialog = true
                 return
             }
@@ -85,6 +85,7 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
         }
         61 -> showKeyDialog = true
         62 -> showStatsDialog = true
+        63, 64 -> onGmcExtraRowClick(index)
     }
 }
 
@@ -100,14 +101,14 @@ private fun GmcClaudeKeyDialogHost() {
         onSave = { key ->
             val trimmed = key.trim()
             if (trimmed.isNotEmpty() && !GmcClaudePrefs.looksLikeKey(trimmed)) {
-                toast(context, "Το κλειδί Claude ξεκινά με sk-ant-")
+                gmcToast(context, "Το κλειδί Claude ξεκινά με sk-ant-")
                 return@GmcClaudeKeyDialog
             }
             GmcClaudePrefs.setApiKey(context, trimmed)
             if (trimmed.isEmpty()) GmcClaudePrefs.setEnabled(context, false)
             revision++
             showKeyDialog = false
-            toast(context, if (trimmed.isEmpty()) "Το κλειδί Claude διαγράφηκε" else "Το κλειδί Claude αποθηκεύτηκε")
+            gmcToast(context, if (trimmed.isEmpty()) "Το κλειδί Claude διαγράφηκε" else "Το κλειδί Claude αποθηκεύτηκε")
         },
         onDismiss = { showKeyDialog = false },
     )
@@ -140,6 +141,7 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             )
             GmcStatsDialogHost()
         }
+        63, 64 -> GmcExtraTvRow(index, isFocused, modifier)
         61 -> {
             SettingsRow(
                 icon = Icons.Default.VpnKey,
@@ -180,9 +182,9 @@ internal fun GmcClaudeMobileRows() {
         title = TITLE_STATS,
         subtitle = DESC_STATS,
         value = statsSummary(remember(revision) { GmcSyncStats.snapshot(context) }),
-        showDivider = false,
         onClick = { onGmcClaudeRowClick(context, 62) },
     )
+    GmcExtraMobileRows()
     GmcClaudeKeyDialogHost()
     GmcStatsDialogHost()
 }
@@ -225,17 +227,25 @@ private fun GmcClaudeKeyDialog(currentKey: String, onSave: (String) -> Unit, onD
                     unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f),
                 ),
             )
+            // Or paste it on the phone.
+            Spacer(modifier = Modifier.height(12.dp))
+            com.arflix.tv.ui.components.GmcPhoneQr(
+                title = TITLE_KEY,
+                fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("Anthropic API key (sk-ant-…)", secret = true)),
+                onValues = { values -> values.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { value = it } },
+                qrSize = 96.dp,
+            )
             Spacer(modifier = Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                DialogButton("Άκυρο", TextSecondary, Modifier.weight(1f), onDismiss)
-                DialogButton("Αποθήκευση", Pink, Modifier.weight(1f)) { onSave(value) }
+                GmcDialogButton("Άκυρο", TextSecondary, Modifier.weight(1f), onDismiss)
+                GmcDialogButton("Αποθήκευση", Pink, Modifier.weight(1f)) { onSave(value) }
             }
         }
     }
 }
 
 @Composable
-private fun DialogButton(label: String, color: androidx.compose.ui.graphics.Color, modifier: Modifier, onClick: () -> Unit) {
+internal fun GmcDialogButton(label: String, color: androidx.compose.ui.graphics.Color, modifier: Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = modifier,
@@ -290,12 +300,12 @@ private fun GmcStatsDialogHost() {
             Text(text = statsText(snapshot), style = ArflixTypography.caption, color = TextPrimary)
             Spacer(modifier = Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                DialogButton("Μηδενισμός", TextSecondary, Modifier.weight(1f)) {
+                GmcDialogButton("Μηδενισμός", TextSecondary, Modifier.weight(1f)) {
                     GmcSyncStats.reset(context)
                     revision++
-                    toast(context, "Τα στατιστικά μηδενίστηκαν")
+                    gmcToast(context, "Τα στατιστικά μηδενίστηκαν")
                 }
-                DialogButton("Κλείσιμο", Pink, Modifier.weight(1f)) { showStatsDialog = false }
+                GmcDialogButton("Κλείσιμο", Pink, Modifier.weight(1f)) { showStatsDialog = false }
             }
         }
     }

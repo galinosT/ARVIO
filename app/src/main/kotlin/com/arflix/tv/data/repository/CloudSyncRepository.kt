@@ -1069,6 +1069,22 @@ class CloudSyncRepository @Inject constructor(
     //  PUSH LOCAL STATE TO CLOUD
     // ══════════════════════════════════════════════════════════
 
+    /**
+     * GMC: restores a settings file exported from GMC (the same JSON as the cloud snapshot) onto
+     * this device, the way a cloud pull would apply it. Nothing is sent to the cloud.
+     */
+    suspend fun gmcImportSnapshot(json: String): Result<Unit> = cloudSyncMutex.withLock {
+        runCatching {
+            val root = JSONObject(json)
+            require(root.has("profiles") || root.has("profileSettingsById")) { "not a GMC/ARVIO settings file" }
+            invalidationBus.suppressDuringRemoteApply {
+                clearStaleLocalDirtyBeforeRemoteRestore()
+                applyCloudPayload(json)
+            }
+            Unit
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+    }
+
     suspend fun pushToCloud(force: Boolean = false): Result<Unit> = cloudSyncMutex.withLock {
         pushToCloudLocked(force = force, allowRemoteRestoreBeforePush = !force)
     }

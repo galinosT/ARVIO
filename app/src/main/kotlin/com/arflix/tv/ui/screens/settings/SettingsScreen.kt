@@ -1500,7 +1500,7 @@ fun SettingsScreen(
                                                 32 -> showAiApiKeyDialog = true
                                                 33 -> viewModel.startAiKeyServer()
                                                 51, 52 -> onLiveAiSubsRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
-                                                60, 61, 62 -> onGmcClaudeRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
+                                                60, 61, 62, 63, 64 -> onGmcClaudeRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
                                                 34 -> viewModel.cycleTrailerDelay()
                                                 47 -> viewModel.cycleGuideRowCount()
                                                 37 -> viewModel.setTrailerInCards(!uiState.trailerInCards)
@@ -4460,6 +4460,14 @@ private fun MdbListConnectDialog(
                     text = stringResource(R.string.mdblist_key_help),
                     style = ArflixTypography.caption,
                     color = TextSecondary
+                )
+                // GMC: or type it on the phone.
+                Spacer(modifier = Modifier.height(12.dp))
+                com.arflix.tv.ui.components.GmcPhoneQr(
+                    title = "MDBList API key",
+                    fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("MDBList API key", apiKey, secret = true)),
+                    onValues = { values -> values.firstOrNull()?.takeIf { it.isNotEmpty() }?.let { apiKey = it } },
+                    qrSize = 96.dp,
                 )
             }
         },
@@ -7752,6 +7760,14 @@ private fun AiApiKeyDialog(
                         unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
                     )
                 )
+                // GMC: or paste the key on the phone.
+                Spacer(modifier = Modifier.height(12.dp))
+                com.arflix.tv.ui.components.GmcPhoneQr(
+                    title = "AI API key",
+                    fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("API key ($placeholder)", secret = true)),
+                    onValues = { values -> values.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { value = it } },
+                    qrSize = 96.dp,
+                )
                 Spacer(modifier = Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     val cancelFocus = remember { FocusRequester() }
@@ -7848,6 +7864,14 @@ private fun CustomUserAgentDialog(
                         focusedBorderColor = Pink,
                         unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
                     )
+                )
+                // GMC: or type it on the phone.
+                Spacer(modifier = Modifier.height(12.dp))
+                com.arflix.tv.ui.components.GmcPhoneQr(
+                    title = "User-Agent",
+                    fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("User-Agent", value, secret = false)),
+                    onValues = { values -> values.firstOrNull()?.takeIf { it.isNotEmpty() }?.let { value = it } },
+                    qrSize = 96.dp,
                 )
                 Spacer(modifier = Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -9051,6 +9075,14 @@ private fun CatalogDiscoveryTextInputDialog(
                     focusedPlaceholderColor = TextSecondary,
                     unfocusedPlaceholderColor = TextSecondary
                 )
+            )
+            // GMC: or type it on the phone.
+            Spacer(modifier = Modifier.height(12.dp))
+            com.arflix.tv.ui.components.GmcPhoneQr(
+                title = title,
+                fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field(title, value, secret = false)),
+                onValues = { values -> values.firstOrNull()?.takeIf { it.isNotEmpty() }?.let { value = it } },
+                qrSize = 96.dp,
             )
             Spacer(modifier = Modifier.height(18.dp))
             if (isCompact) {
@@ -12049,6 +12081,20 @@ private fun InputModal(
                         color = TextSecondary.copy(alpha = 0.68f),
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
+                // GMC: fill these fields from the phone (empty phone fields leave the TV's as they are).
+                if (fields.isNotEmpty()) {
+                    com.arflix.tv.ui.components.GmcPhoneQr(
+                        title = title,
+                        fields = fields.map {
+                            com.arflix.tv.server.GmcPhoneServer.Field(it.label, it.value, it.isSecret, !it.singleLine)
+                        },
+                        onValues = { values ->
+                            values.forEachIndexed { i, v -> if (v.isNotEmpty()) fields.getOrNull(i)?.onValueChange?.invoke(v) }
+                        },
+                        modifier = Modifier.padding(bottom = 12.dp),
+                        qrSize = 96.dp,
                     )
                 }
 

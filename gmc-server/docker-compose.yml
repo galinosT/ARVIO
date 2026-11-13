@@ -1,0 +1,11 @@
+services:
+  gmc-memory:
+    build: .
+    container_name: gmc-memory
+    restart: unless-stopped
+    env_file: .env          # GMC_TOKEN=<random, at least 24 characters>
+    volumes:
+      - ./data:/data
+    # Reached only through the reverse proxy (Caddy): bound to localhost, not to the internet.
+    ports:
+      - "127.0.0.1:8787:8787"

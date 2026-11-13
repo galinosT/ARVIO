@@ -519,7 +519,17 @@ class PlayerViewModel @Inject constructor(
     val translationManager: SubtitleTranslationManager = SubtitleTranslationManager(
         service = translationService,
         targetLanguage = "",
-        scope = viewModelScope
+        scope = viewModelScope,
+        // GMC: subtitle memory server + per-title glossary.
+        gmcContext = context,
+        gmcTitle = {
+            currentMediaId.takeIf { it > 0 }?.let { id ->
+                com.arflix.tv.ui.screens.player.subtitles.GmcGlossary.Title(
+                    key = (if (currentMediaType == MediaType.MOVIE) "movie:" else "tv:") + id,
+                    name = currentTitle,
+                )
+            }
+        }
     ).also { mgr ->
         mgr.onTranslatingChanged = { isTranslating -> _isTranslatingLive.value = isTranslating }
         mgr.onUntranslatableSource = {

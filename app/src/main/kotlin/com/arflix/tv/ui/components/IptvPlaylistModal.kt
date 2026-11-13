@@ -1,5 +1,7 @@
 package com.arflix.tv.ui.components
 
+import com.arflix.tv.server.GmcPhoneServer
+
 import android.content.Context
 import android.text.InputType
 import android.text.method.PasswordTransformationMethod
@@ -758,6 +760,48 @@ fun IptvPlaylistModal(
                                     )
                                 }
                             }
+
+                            // GMC: fill the form from the phone (empty phone fields leave these as they are).
+                            Spacer(modifier = Modifier.height(16.dp))
+                            val phoneFields = when (sourceType) {
+                                IptvSourceType.M3U -> listOf(
+                                    GmcPhoneServer.Field("Όνομα", playlistName),
+                                    GmcPhoneServer.Field("URL λίστας M3U", playlistUrl),
+                                    GmcPhoneServer.Field("EPG (προαιρετικό)", epgSources),
+                                )
+                                IptvSourceType.XTREAM -> listOf(
+                                    GmcPhoneServer.Field("Όνομα", playlistName),
+                                    GmcPhoneServer.Field("Server URL", playlistUrl),
+                                    GmcPhoneServer.Field("Username", xtreamUser),
+                                    GmcPhoneServer.Field("Password", xtreamPass, secret = true),
+                                    GmcPhoneServer.Field("EPG (προαιρετικό)", epgSources),
+                                )
+                                IptvSourceType.STALKER -> listOf(
+                                    GmcPhoneServer.Field("Όνομα", stalkerName),
+                                    GmcPhoneServer.Field("Portal URL", stalkerPortalUrl),
+                                    GmcPhoneServer.Field("MAC", stalkerMac),
+                                )
+                            }
+                            GmcPhoneQr(
+                                title = "IPTV · ${sourceType.name}",
+                                fields = phoneFields,
+                                onValues = { values ->
+                                    fun v(i: Int) = values.getOrNull(i)?.takeIf { it.isNotEmpty() }
+                                    when (sourceType) {
+                                        IptvSourceType.M3U -> {
+                                            v(0)?.let { playlistName = it }; v(1)?.let { playlistUrl = it }; v(2)?.let { epgSources = it }
+                                        }
+                                        IptvSourceType.XTREAM -> {
+                                            v(0)?.let { playlistName = it }; v(1)?.let { playlistUrl = it }
+                                            v(2)?.let { xtreamUser = it }; v(3)?.let { xtreamPass = it }; v(4)?.let { epgSources = it }
+                                        }
+                                        IptvSourceType.STALKER -> {
+                                            v(0)?.let { stalkerName = it }; v(1)?.let { stalkerPortalUrl = it }; v(2)?.let { stalkerMac = it }
+                                        }
+                                    }
+                                },
+                                qrSize = 88.dp,
+                            )
                         }
 
                         // Right Pane: Input Form Fields & Action Buttons

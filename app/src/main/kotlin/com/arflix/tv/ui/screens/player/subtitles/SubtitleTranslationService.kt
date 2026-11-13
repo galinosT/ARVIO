@@ -415,6 +415,22 @@ class SubtitleTranslationService(
         }
     }
 
+    /**
+     * GMC: names and forms of address for the title being translated (GmcGlossary), added to the
+     * Claude prompt so a name is written the same way in every batch. Empty: none.
+     */
+    @Volatile internal var glossary: String = ""
+
+    /** GMC: which model translates right now, for the subtitle memory. */
+    internal fun modelLabel(): String =
+        if (claudeKeyProvider().isNotBlank()) GMC_CLAUDE_MODEL_ID else modelProvider().name.lowercase()
+
+    /** GMC: one free-form Claude request (the glossary builder); null when Claude is off or fails. */
+    internal suspend fun claudeComplete(systemPrompt: String, userText: String): String? {
+        val key = claudeKeyProvider().takeIf { it.isNotBlank() } ?: return null
+        return (claudeTranslateCall(client, key, systemPrompt, userText) as? ClaudeReply.Text)?.text
+    }
+
     /** GMC: the Gemini request's prompt and batch, sent to Claude Haiku (transport in GmcClaude.kt). */
     private suspend fun translateClaude(
         lines: List<String>,
@@ -424,7 +440,10 @@ class SubtitleTranslationService(
     ): TranslationResult {
         val NL = "⏎"
         val userText = "Translate to $targetLanguage:\n${encodeIndexed(lines, NL)}"
-        return when (val reply = claudeTranslateCall(client, apiKey, buildSystemPrompt(targetLanguage, NL), userText)) {
+        val terms = glossary.trim()
+        val systemPrompt = buildSystemPrompt(targetLanguage, NL) + if (terms.isEmpty()) "" else
+            "\n\nGlossary for this title — write these names and use these forms of address consistently:\n$terms"
+        return when (val reply = claudeTranslateCall(client, apiKey, systemPrompt, userText)) {
             is ClaudeReply.Refused -> TranslationResult(lines, false, TRANSLATION_ERROR_CONTENT_BLOCKED)
             is ClaudeReply.Failed -> TranslationResult(lines, false, reply.message)
             is ClaudeReply.Text -> {

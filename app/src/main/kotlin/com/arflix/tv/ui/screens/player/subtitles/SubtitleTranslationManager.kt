@@ -14,7 +14,11 @@ import kotlinx.coroutines.CancellationException
 class SubtitleTranslationManager(
     private var service: SubtitleTranslationService,
     internal var targetLanguage: String,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    /** GMC: the subtitle memory server and glossaries need it; null turns both off. */
+    private val gmcContext: android.content.Context? = null,
+    /** GMC: the title being watched, for its glossary; null when unknown. */
+    private val gmcTitle: () -> GmcGlossary.Title? = { null },
 ) {
     companion object {
         const val MOCK_MODE = false
@@ -86,7 +90,23 @@ class SubtitleTranslationManager(
                 batch.add(next)
             }
 
+            // GMC: lines any box has translated before come from the memory server, free.
+            val remembered = fromMemory(batch.map { it.text })
+            if (remembered.isNotEmpty()) {
+                batch.removeAll { item ->
+                    val known = remembered[item.text] ?: return@removeAll false
+                    cache[item.text] = known
+                    inFlight.remove(item.text)
+                    item.deferred.complete(known)
+                    true
+                }
+                if (batch.isEmpty()) {
+                    onBatchResult?.invoke(true, null)
+                    continue
+                }
+            }
             val texts = batch.map { it.text }
+            prepareGlossary(texts)
             val result = try {
                 service.translateBatch(texts, targetLanguage)
             } catch (e: CancellationException) {
@@ -117,6 +137,7 @@ class SubtitleTranslationManager(
                 inFlight.remove(item.text)
                 item.deferred.complete(translated)
             }
+            remember(texts, result)
             batch.clear()
         }
     }
@@ -168,20 +189,115 @@ class SubtitleTranslationManager(
         // selected under the hood by "find best match" with AI translation off. Never spend
         // API requests unless translation is actually active.
         if (!isEnabled) return
-        val uncached = texts.filter { !cache.containsKey(it) && !inFlight.containsKey(it) }
+        val waiting = texts.filter { !cache.containsKey(it) && !inFlight.containsKey(it) }
+        if (waiting.isEmpty()) return
+        // GMC: what the memory server already has needs no request at all.
+        val remembered = fromMemory(waiting)
+        remembered.forEach { (text, translated) -> cache[text] = translated }
+        val uncached = waiting.filter { it !in remembered }
         if (uncached.isEmpty()) return
         uncached.chunked(40).forEach { chunk ->
+            prepareGlossary(chunk)
             val result = service.translateBatch(chunk, targetLanguage)
             if (result.success) {
                 onBatchResult?.invoke(true, null)
                 chunk.forEachIndexed { i, text ->
                     cache[text] = result.lines.getOrElse(i) { text }
                 }
+                remember(chunk, result)
             } else {
                 onBatchResult?.invoke(false, result.errorMessage)
                 delay(5_000L)
                 return
             }
         }
+    }
+
+    // ── GMC: subtitle memory and glossary ────────────────────────────────────────────────────
+
+    private suspend fun fromMemory(texts: List<String>): Map<String, String> {
+        val context = gmcContext ?: return emptyMap()
+        val config = GmcSubtitleMemory.config(context) ?: return emptyMap()
+        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return emptyMap()
+        return try {
+            GmcSubtitleMemory.lookup(config, lang, texts)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /** Uploads a successful batch, leaving out the lines the model never really translated. */
+    private fun remember(texts: List<String>, result: TranslationResult) {
+        val context = gmcContext ?: return
+        val config = GmcSubtitleMemory.config(context) ?: return
+        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return
+        val model = service.modelLabel()
+        val items = texts.mapIndexedNotNull { i, text ->
+            if (i in result.untranslated) return@mapIndexedNotNull null
+            result.lines.getOrNull(i)?.takeIf { it.isNotBlank() && it != text }?.let { text to it }
+        }
+        if (items.isEmpty()) return
+        scope.launch {
+            try {
+                GmcSubtitleMemory.store(config, lang, model, items)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    @Volatile private var glossaryKey: String? = null
+    @Volatile private var glossaryText: String = ""
+    @Volatile private var glossaryBuildTried = false
+    private val glossarySource = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+    /**
+     * Puts the current title's glossary on the service before a Claude batch: loaded once per title,
+     * and when there is none, built in the background from the first [GmcGlossary.LINES_TO_BUILD]
+     * English lines seen. Gemini/Groq batches are left exactly as they were.
+     */
+    private suspend fun prepareGlossary(texts: List<String>) {
+        val context = gmcContext ?: return
+        if (!service.modelLabel().startsWith("claude")) {
+            service.glossary = ""
+            return
+        }
+        val title = gmcTitle() ?: run { service.glossary = ""; return }
+        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return
+        val key = "${title.key}|${lang.lowercase()}"
+        if (key != glossaryKey) {
+            glossaryKey = key
+            glossaryBuildTried = false
+            glossarySource.clear()
+            glossaryText = try {
+                GmcGlossary.load(context, title, lang)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        if (glossaryText.isBlank() && !glossaryBuildTried) {
+            if (glossarySource.size < GmcGlossary.LINES_TO_BUILD) glossarySource.addAll(texts)
+            if (glossarySource.size >= GmcGlossary.LINES_TO_BUILD) {
+                glossaryBuildTried = true
+                val lines = glossarySource.toList()
+                val builder = service
+                scope.launch {
+                    val built = try {
+                        GmcGlossary.build(context, builder, title, lang, lines)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (built != null && glossaryKey == key) glossaryText = built
+                }
+            }
+        }
+        service.glossary = glossaryText
     }
 }
