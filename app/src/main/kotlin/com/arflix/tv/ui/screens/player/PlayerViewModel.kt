@@ -5825,6 +5825,12 @@ class PlayerViewModel @Inject constructor(
                         matchStep("3· \"${provisional.label}\" failed at $pct% — trying other subtitles")
                 }
             }
+            // GMC: whether AI translation could hold the screen if this scan does not hand it an
+            // addon subtitle — only then can the GMC rule below change anything (see GmcSyncStats).
+            val gmcAiPossible = _uiState.value.isAiTranslating || (
+                userLockedSubtitleKey == null && aiSubtitleEnabled && aiApiKey.isNotBlank() &&
+                    findAiSourceSubtitle(_uiState.value.subtitles) != null
+                )
             // Thin evidence may ACCEPT but must never REJECT. A handful of reference windows in a
             // quiet stretch says nothing about a subtitle: if the candidate happens not to cover
             // two of four windows — English CC sound-effect cues that a dialogue translation
@@ -5842,11 +5848,71 @@ class PlayerViewModel @Inject constructor(
                         "(best=${"%.2f".format(best?.score ?: 0.0)}) — keeping \"${provisional.label}\""
                 )
                 matchStep("3· too little dialogue to judge — keeping \"${provisional.label}\"")
+                com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, gmcAiPossible, originalAi = false, gmcAi = false)
                 endMatch()
                 return@launch
             }
 
             if (winner != null) {
+                // GMC: the last half-second (GmcFineSync). The scan never shifts a subtitle by
+                // under 700ms, so one it accepted can still be that far out. Measure where its lines
+                // START against the reference track's, per third of the episode: one constant amount
+                // everywhere is corrected; not one constant amount means the subtitle is not right
+                // all the way through, and AI translation (timed by the built-in track) stays.
+                // A cue-by-cue retime is already anchored line by line and is taken as it is.
+                val gmcReferenceStarts = when {
+                    alternateReferenceInUse -> alternateRefs.firstOrNull { it.refs === referenceRefs }?.cues
+                    else -> primaryTimeline?.cues
+                }?.map { it.startMs } ?: referenceCues.map { it.startMs }
+                // The candidate the scan checked (`winner` may be an identical copy served in its place).
+                val gmcChecked: ScoredCandidate = decided ?: winner
+                val gmcCues = loaded.firstOrNull { (s, _) -> s.provider == gmcChecked.sub.provider && s.id == gmcChecked.sub.id }?.second
+                // What is actually served: the checked file, or an identical copy of it that already
+                // carries part of the shift (familyMemberFor) — its cues sit `shift` later.
+                val gmcMemberShiftMs = if (winner.sub === gmcChecked.sub) 0L else
+                    familyMembers["${gmcChecked.sub.provider}|${gmcChecked.sub.id}"]?.firstOrNull { it.first === winner.sub }?.second
+                val gmcMeasurement = if (winner.retime?.uniform == false || gmcCues == null || gmcMemberShiftMs == null) null else {
+                    com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.measure(
+                        gmcCues.map { it.startMs + gmcMemberShiftMs + winner.offsetMs }, gmcReferenceStarts
+                    )
+                }
+                Log.i(
+                    "SubMatch",
+                    "[gmc] \"${winner.sub.label}\": " + (gmcMeasurement?.let {
+                        "starts ${it.shiftMs}ms off, thirds=${it.thirds.joinToString("/")}ms spread=${it.spreadMs}ms " +
+                            "pairs=${it.pairs} -> " + when {
+                                !it.consistent -> "not one constant amount"
+                                it.correctionMs != 0L -> "correcting by ${it.correctionMs}ms"
+                                else -> "in sync"
+                            }
+                    } ?: if (winner.retime?.uniform == false) "re-timed line by line — taken as it is" else "too little to measure")
+                )
+                val gmcKeepAi = gmcMeasurement != null && !gmcMeasurement.consistent && gmcAiPossible
+                if (gmcKeepAi) {
+                    stopAudioSync()
+                    val aiHolding = _uiState.value.isAiTranslating || tryAiFallbackAfterScan()
+                    if (aiHolding) {
+                        com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, true, originalAi = false, gmcAi = true)
+                        matchStep("4· GMC: \"${winner.sub.label}\" is not in sync all the way through — keeping AI")
+                        showMatchToast(
+                            PlayerMessage.Raw(
+                                "Ο υπότιτλος «${winner.sub.label}» δεν είναι συγχρονισμένος σε όλο το επεισόδιο — μένει η μετάφραση AI"
+                            )
+                        )
+                        return@launch
+                    }
+                }
+                if (gmcMeasurement == null && winner.retime?.uniform != false) {
+                    com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordUnmeasured(context)
+                }
+                val gmcCorrectionMs = gmcMeasurement?.correctionMs ?: 0L
+                if (gmcCorrectionMs != 0L) {
+                    com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordFineTune(context, gmcCorrectionMs)
+                }
+                com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, gmcAiPossible, originalAi = false, gmcAi = false)
+                val gmcWinner = if (gmcCorrectionMs == 0L) winner else winner.copy(offsetMs = winner.offsetMs + gmcCorrectionMs)
+                @Suppress("NAME_SHADOWING")
+                val winner = gmcWinner
                 stopAudioSync()
                 val sync = SubtitleAutoSync.ofMs(winner.offsetMs)
                 // A cue-by-cue retime is a different FILE, not a live offset, so it can never be
@@ -5934,6 +6000,7 @@ class PlayerViewModel @Inject constructor(
                 // unverified-but-plausible choice selectLastResort would make anyway.
                 // AI is holding the screen and stays there (selectLastResort returns early while
                 // translating) — restoring the pre-scan selection would tear it away for nothing.
+                com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, gmcAiPossible, originalAi = true, gmcAi = true)
                 if (!aiInterim && (provisional == null || provisionalDisplaced)) {
                     restoreSubtitle(previousSubtitle)
                 }

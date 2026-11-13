@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +37,7 @@ import com.arflix.tv.ui.components.MobileSettingsRow
 import com.arflix.tv.ui.components.SettingsRow
 import com.arflix.tv.ui.components.SettingsToggleRow
 import com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs
+import com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats
 import com.arflix.tv.ui.theme.ArflixTypography
 import com.arflix.tv.ui.theme.BackgroundElevated
 import com.arflix.tv.ui.theme.Pink
@@ -48,7 +50,7 @@ import com.arflix.tv.ui.theme.TextSecondary
  */
 
 /** TV settings row indices, after the existing ones (0–54). */
-internal val GMC_CLAUDE_ROWS = listOf(60, 61)
+internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62)
 
 private const val TITLE_SWITCH = "Claude Haiku (GMC)"
 private const val DESC_SWITCH =
@@ -59,6 +61,10 @@ private const val DESC_KEY = "Anthropic API key (sk-ant-…). Δεν συγχρ�
 // Bumped on every write so the rows re-read the device-local preferences.
 private var revision by mutableStateOf(0)
 private var showKeyDialog by mutableStateOf(false)
+private var showStatsDialog by mutableStateOf(false)
+
+private const val TITLE_STATS = "Στατιστικά συγχρονισμού (GMC)"
+private const val DESC_STATS = "Πόσες φορές μπήκε μετάφραση AI με τους κανόνες του GMC και πόσες θα έμπαινε στο αρχικό ARVIO."
 
 private fun toast(context: Context, text: String) {
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
@@ -78,6 +84,7 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
             revision++
         }
         61 -> showKeyDialog = true
+        62 -> showStatsDialog = true
     }
 }
 
@@ -121,6 +128,18 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             onToggle = { onGmcClaudeRowClick(context, 60) },
             modifier = modifier,
         )
+        62 -> {
+            SettingsRow(
+                icon = Icons.Default.QueryStats,
+                title = TITLE_STATS,
+                subtitle = DESC_STATS,
+                value = statsSummary(remember(revision) { GmcSyncStats.snapshot(context) }),
+                isFocused = isFocused,
+                onClick = { onGmcClaudeRowClick(context, 62) },
+                modifier = modifier,
+            )
+            GmcStatsDialogHost()
+        }
         61 -> {
             SettingsRow(
                 icon = Icons.Default.VpnKey,
@@ -154,10 +173,18 @@ internal fun GmcClaudeMobileRows() {
         title = TITLE_KEY,
         subtitle = DESC_KEY,
         value = maskKey(key),
-        showDivider = false,
         onClick = { onGmcClaudeRowClick(context, 61) },
     )
+    MobileSettingsRow(
+        icon = Icons.Default.QueryStats,
+        title = TITLE_STATS,
+        subtitle = DESC_STATS,
+        value = statsSummary(remember(revision) { GmcSyncStats.snapshot(context) }),
+        showDivider = false,
+        onClick = { onGmcClaudeRowClick(context, 62) },
+    )
     GmcClaudeKeyDialogHost()
+    GmcStatsDialogHost()
 }
 
 @Composable
@@ -224,5 +251,52 @@ private fun DialogButton(label: String, color: androidx.compose.ui.graphics.Colo
             textAlign = TextAlign.Center,
             color = color,
         )
+    }
+}
+
+/** "AI 4 → 6 / 20" : original rules → GMC rules, out of the scans where AI could run. */
+private fun statsSummary(s: GmcSyncStats.Snapshot): String =
+    if (s.scansAiPossible == 0) "Καμία αναζήτηση ακόμα" else "AI ${s.originalAi} → ${s.gmcAi} / ${s.scansAiPossible}"
+
+private fun percent(part: Int, whole: Int): String = if (whole == 0) "0%" else "${part * 100 / whole}%"
+
+private fun statsText(s: GmcSyncStats.Snapshot): String = buildString {
+    appendLine("Αναζητήσεις όπου μπορούσε να μπει AI: ${s.scansAiPossible}")
+    appendLine("• Αρχικό ARVIO, μετάφραση AI: ${s.originalAi} (${percent(s.originalAi, s.scansAiPossible)})")
+    appendLine("• GMC, μετάφραση AI: ${s.gmcAi} (${percent(s.gmcAi, s.scansAiPossible)})")
+    appendLine("• Επιπλέον επεισόδια με AI λόγω GMC: ${s.gmcKeptAi}")
+    appendLine()
+    appendLine("Φινίρισμα χρονισμού: ${s.fineTuned} φορές, μέση διόρθωση ${s.averageFineTuneMs} ms")
+    appendLine("Δεν μετρήθηκαν (λίγοι υπότιτλοι αναφοράς): ${s.unmeasured}")
+    append("Αναζητήσεις χωρίς δυνατότητα AI: ${s.scansNoAi}")
+}
+
+@Composable
+private fun GmcStatsDialogHost() {
+    if (!showStatsDialog) return
+    val context = LocalContext.current
+    val snapshot = remember(revision) { GmcSyncStats.snapshot(context) }
+    BackHandler { showStatsDialog = false }
+    androidx.compose.ui.window.Dialog(onDismissRequest = { showStatsDialog = false }) {
+        Column(
+            modifier = Modifier
+                .width(560.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(BackgroundElevated)
+                .padding(24.dp)
+        ) {
+            Text(text = TITLE_STATS, style = ArflixTypography.sectionTitle, color = TextPrimary)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = statsText(snapshot), style = ArflixTypography.caption, color = TextPrimary)
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DialogButton("Μηδενισμός", TextSecondary, Modifier.weight(1f)) {
+                    GmcSyncStats.reset(context)
+                    revision++
+                    toast(context, "Τα στατιστικά μηδενίστηκαν")
+                }
+                DialogButton("Κλείσιμο", Pink, Modifier.weight(1f)) { showStatsDialog = false }
+            }
+        }
     }
 }
