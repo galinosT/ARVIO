@@ -215,10 +215,21 @@ class SubtitleTranslationManager(
 
     // ── GMC: subtitle memory and glossary ────────────────────────────────────────────────────
 
+    /**
+     * The memory is kept per title: the same English line can need another Greek line in another
+     * show (gender, register — "Are you ready?" is «έτοιμος» or «έτοιμη»). The server only hashes
+     * this value, so the title rides along in it. Null when the title is unknown: nothing is shared.
+     */
+    private fun memoryScope(): String? {
+        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return null
+        val title = gmcTitle() ?: return null
+        return "$lang|${title.key}"
+    }
+
     private suspend fun fromMemory(texts: List<String>): Map<String, String> {
         val context = gmcContext ?: return emptyMap()
         val config = GmcSubtitleMemory.config(context) ?: return emptyMap()
-        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return emptyMap()
+        val lang = memoryScope() ?: return emptyMap()
         return try {
             GmcSubtitleMemory.lookup(config, lang, texts)
         } catch (e: CancellationException) {
@@ -232,7 +243,7 @@ class SubtitleTranslationManager(
     private fun remember(texts: List<String>, result: TranslationResult) {
         val context = gmcContext ?: return
         val config = GmcSubtitleMemory.config(context) ?: return
-        val lang = targetLanguage.takeIf { it.isNotBlank() } ?: return
+        val lang = memoryScope() ?: return
         val model = service.modelLabel()
         val items = texts.mapIndexedNotNull { i, text ->
             if (i in result.untranslated) return@mapIndexedNotNull null
