@@ -4,7 +4,7 @@
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   TMDB_API_KEY, TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET   your own API credentials
-#   KEYSTORE_BASE64, KEYSTORE_PASSWORD                   from the "Personal keystore" workflow (once)
+#   KEYSTORE_BASE64, KEYSTORE_PASSWORD                   created by the first run (artifact "personal-keystore")
 name: Personal build
 
 on:
@@ -35,6 +35,7 @@ jobs:
           cache: gradle
 
       - name: Check secrets
+        id: secrets
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
@@ -43,13 +44,50 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           missing=""
-          for v in TMDB_API_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET KEYSTORE_BASE64 KEYSTORE_PASSWORD; do
+          for v in TMDB_API_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing"
-            exit 1
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "keystore=missing" >> "$GITHUB_OUTPUT"
+            missing="$missing KEYSTORE_BASE64 KEYSTORE_PASSWORD"
           fi
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+
+      # First run only: create the signing key and hand it over as a short-lived artifact.
+      - name: Create signing key
+        if: steps.secrets.outputs.keystore == 'missing'
+        run: |
+          umask 077
+          mkdir keystore-out
+          pass="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
+          keytool -genkeypair -keystore personal.jks -storetype PKCS12 \
+            -alias personal -keyalg RSA -keysize 4096 -validity 36500 \
+            -storepass "$pass" -keypass "$pass" \
+            -dname "CN=ARVIO G personal build" >/dev/null 2>&1
+          base64 -w0 personal.jks > keystore-out/KEYSTORE_BASE64.txt
+          printf '%s' "$pass" > keystore-out/KEYSTORE_PASSWORD.txt
+          cp personal.jks keystore-out/personal.jks
+          printf '%s\n' \
+            "1. Repository Settings > Secrets and variables > Actions > New repository secret." \
+            "2. KEYSTORE_BASE64 = the whole content of KEYSTORE_BASE64.txt" \
+            "3. KEYSTORE_PASSWORD = the content of KEYSTORE_PASSWORD.txt" \
+            "4. Keep personal.jks and the password in your password manager. Never lose them:" \
+            "   a build signed with another key cannot update the installed app." \
+            "5. Delete this artifact from the run page." > keystore-out/README.txt
+
+      - name: Upload signing key
+        if: steps.secrets.outputs.keystore == 'missing'
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-keystore
+          path: keystore-out/
+          retention-days: 1
+
+      - name: Stop until secrets are set
+        if: steps.secrets.outputs.missing != ''
+        run: |
+          echo "::error::Add these repository secrets, then run the build again:${{ steps.secrets.outputs.missing }}"
+          exit 1
 
       - name: Write build credentials
         env:

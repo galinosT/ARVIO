@@ -12,11 +12,13 @@ This branch (`galinos`) is ARVIO plus personal changes, built as a separate app
 
 ## One-time setup
 
-1. Actions → "Personal keystore (run once)" → Run workflow. Download the artifact, add the
-   secrets it describes, keep `personal.jks` and the password as a backup, delete the artifact.
+1. The first run of "Personal build" creates the signing key and uploads it as the artifact
+   `personal-keystore`. Download it, add the two secrets it describes, keep `personal.jks` and the
+   password as a backup, delete the artifact.
 2. Settings → Secrets and variables → Actions: add `TMDB_API_KEY`, `TRAKT_CLIENT_ID`,
    `TRAKT_CLIENT_SECRET`.
-3. Actions → "Personal build" → Run workflow on `galinos`.
+3. Settings → General → Default branch: `galinos`, so "Run workflow" appears in the Actions tab.
+   Then Actions → "Personal build" → Run workflow.
 4. On each Shield: install Obtainium, add `https://github.com/galinosT/ARVIO`.
 
 ## Personal changes on this branch
