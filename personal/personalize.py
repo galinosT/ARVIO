@@ -14,6 +14,7 @@ What it changes:
   - in-app updater points at this fork's GitHub releases instead of the official ones
   - Firebase/Crashlytics off: the bundled Firebase config belongs to the official app
   - skips the release check that demands the official Telegram/cloud credentials
+  - GMC branding: launcher icon, TV banner and icon background from personal/branding/
 
 Environment:
   PERSONAL_PACKAGE   package name             (default com.galinos.gmc)
@@ -24,6 +25,7 @@ Environment:
 import os
 import pathlib
 import re
+import shutil
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -99,12 +101,42 @@ def main():
     if renamed == 0:
         fail("no app_name string found")
 
+    branded = apply_branding()
+
     print(f"personalize: package {package}, name '{app_name}', version {version} ({code}), "
-          f"updates from {owner}/{name}, Firebase off, app_name set in {renamed} file(s)")
+          f"updates from {owner}/{name}, Firebase off, app_name set in {renamed} file(s), "
+          f"{branded} branding file(s)")
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:
             f.write(f"version={version}\nversion_code={code}\n")
+
+
+def apply_branding():
+    """Copies personal/branding/res over app/src/main/res. A file replaces any resource of the same
+    name in that folder whatever its extension (app_banner.png replaces app_banner.webp), since
+    Android refuses two files for one resource. The adaptive icon's background colour follows."""
+    src = ROOT / "personal" / "branding" / "res"
+    res = ROOT / "app" / "src" / "main" / "res"
+    if not src.is_dir():
+        return 0
+    count = 0
+    for file in sorted(p for p in src.rglob("*") if p.is_file()):
+        rel = file.relative_to(src)
+        target_dir = res / rel.parent
+        if not target_dir.is_dir():
+            fail(f"branding folder {rel.parent} does not exist in the app resources")
+        for old in target_dir.glob(file.stem + ".*"):
+            old.unlink()
+        shutil.copyfile(file, target_dir / file.name)
+        count += 1
+    colors = res / "values" / "colors.xml"
+    c = colors.read_text(encoding="utf-8")
+    c = re.sub(r'(<color name="ic_launcher_background">)[^<]*(</color>)', r"\g<1>#0E0F12\g<2>", c)
+    if "#0E0F12</color>" not in c:
+        fail("ic_launcher_background colour not found")
+    colors.write_text(c, encoding="utf-8")
+    return count
 
 
 if __name__ == "__main__":

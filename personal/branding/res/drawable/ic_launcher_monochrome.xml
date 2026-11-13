@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GMC: the play-G mark, one colour, for themed launcher icons. 108dp canvas, mark in the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.62"
+        android:scaleY="0.62"
+        android:translateX="23"
+        android:translateY="23">
+        <path
+            android:pathData="M76.05,28.15 A34,34 0 1,0 84,50"
+            android:strokeColor="#000000"
+            android:strokeWidth="13" />
+        <path
+            android:pathData="M45,35 L45,65 L70,50 Z"
+            android:fillColor="#000000" />
+    </group>
+</vector>
