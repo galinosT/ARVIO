@@ -850,9 +850,9 @@ class CloudSyncRepository @Inject constructor(
         )
         root.put("profileSettingsById", JSONObject(gson.toJson(profileSettingsById)))
 
-        // Trakt tokens per profile
-        val traktTokens = traktRepository.exportTokensForProfiles(profiles.map { it.id })
-        root.put("traktTokens", JSONObject(gson.toJson(traktTokens)))
+        // Trakt tokens per profile. GMC: the cloud's tokens, passed back untouched — this app's own
+        // Trakt connection never leaves the device (see GmcTraktIsolation).
+        root.put("traktTokens", JSONObject(GmcTraktIsolation.tokensToUpload(context)))
 
         // MDBList selection (provider + API key) per profile
         val mdbListSyncByProfile = syncProviderStore.exportForProfiles(profiles.map { it.id })
@@ -1937,10 +1937,9 @@ class CloudSyncRepository @Inject constructor(
 
         // ── Trakt tokens ──
         try {
+            // GMC: kept for the next upload, never applied here (see GmcTraktIsolation).
             root.optJSONObject("traktTokens")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
-                val type = TypeToken.getParameterized(Map::class.java, String::class.java, TraktRepository.CloudTraktToken::class.java).type
-                val tokens: Map<String, TraktRepository.CloudTraktToken> = gson.fromJson(json, type) ?: emptyMap()
-                traktRepository.importTokensForProfiles(tokens)
+                GmcTraktIsolation.rememberRemoteTokens(context, json)
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
