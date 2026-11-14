@@ -26,6 +26,10 @@ import kotlinx.coroutines.launch
 private object AiSubtitleRegexes {
     val BRACKET_REGEX = Regex("""\[.*?\]""")
     val MUSIC_REGEX = Regex("[♪♫]+")
+    // GMC: hearing-impaired captions also come as (TENSE MUSIC) / (sighs) and as speaker labels
+    // ("JOHN:", "MAN ON TV:") at the start of a line; left in, they were translated as dialogue.
+    val PAREN_REGEX = Regex("""\([^()\n]{1,60}\)""")
+    val SPEAKER_REGEX = Regex("""(?m)^(\s*-?\s*)[A-Z][A-Z0-9 .'&-]{1,30}:\s*""")
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -259,11 +263,12 @@ private class TranslatingTextOutput(
             // Translation is ON yet this source yields no text: tell the ViewModel so it can move
             // to a real text track (or turn AI off) instead of silently showing the source
             // language and looking like "AI returned English".
-            manager.onUntranslatableSource?.invoke()
+            if (manager.gmcNoteBlankCue()) manager.onUntranslatableSource?.invoke()
             lastCueGroup = cueGroup
             delegate.onCues(cueGroup)
             return
         }
+        manager.gmcNoteTextCue()
         val text = if (manager.removeHearingImpaired) stripHearingImpaired(rawText) else rawText
         if (text.isBlank()) {
             // SDH sound-effect-only cue (e.g. "[CROWD CHEERING]") — hide it but do NOT update
@@ -345,6 +350,8 @@ private class TranslatingTextOutput(
     private fun stripHearingImpaired(text: String): String =
         text.replace(AiSubtitleRegexes.BRACKET_REGEX, "")
             .replace(AiSubtitleRegexes.MUSIC_REGEX, "")
+            .replace(AiSubtitleRegexes.PAREN_REGEX, "")
+            .replace(AiSubtitleRegexes.SPEAKER_REGEX, "$1")
             .trim()
 
     private fun cleanSdhCues(cues: List<Cue>): List<Cue> = cues.mapNotNull { cue ->

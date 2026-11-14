@@ -533,6 +533,12 @@ class PlayerViewModel @Inject constructor(
         }
     ).also { mgr ->
         mgr.onTranslatingChanged = { isTranslating -> _isTranslatingLive.value = isTranslating }
+        mgr.onGmcMemoryReport = { fromMemory, total ->
+            val percent = (fromMemory * 100 / total.coerceAtLeast(1)).coerceIn(1, 100)
+            viewModelScope.launch {
+                showMatchToast(PlayerMessage.Raw("Μετάφραση από τη μνήμη: $percent%"))
+            }
+        }
         mgr.onUntranslatableSource = {
             // Several renderer callbacks can queue before Main switches to the next source.
             // A second callback for the old source must not blacklist the new one.
@@ -956,7 +962,7 @@ class PlayerViewModel @Inject constructor(
             translationManager.updateService(apiKey = aiApiKey, model = aiModel)
             translationManager.removeHearingImpaired = aiRemoveHearingImpaired
             translationManager.isEnabled = false
-            untranslatableSourceKeys.clear()
+            untranslatableSourceKeys.clear(); translationManager.gmcNewSource()
             translationManager.reset()
 
             val autoSkipIntro = prefs[profileManager.profileBooleanKey("auto_skip_intro")] ?: false
@@ -3309,7 +3315,7 @@ class PlayerViewModel @Inject constructor(
             userLockedSubtitleKey = null
             autoMatchAttempted = false
             aiSourceSubtitle = null
-            untranslatableSourceKeys.clear()
+            untranslatableSourceKeys.clear(); translationManager.gmcNewSource()
             translationManager.isEnabled = false
 
             if (admitIptvVodStream(resolvedStream) is IptvAdmission.Full) {
@@ -4086,6 +4092,9 @@ class PlayerViewModel @Inject constructor(
             userLockedSubtitleKey = null
             cancelFindBestMatch("user chose AI translation")
             subtitleSelectionJob?.cancel()
+        }
+        if (aiSourceSubtitle?.let(SubtitleSelectionPolicy::key) != SubtitleSelectionPolicy.key(source)) {
+            translationManager.gmcNewSource()
         }
         aiSourceSubtitle = source
         cancelSubtitleLocalization()

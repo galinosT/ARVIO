@@ -28,6 +28,8 @@ class SubtitleTranslationManager(
         // No artificial rate limit needed — just don't fire concurrent requests.
         // If we get a 429, we back off 5s.
         private const val BATCH_WINDOW_MS = 150L  // wait up to 150ms for more items to batch
+        private const val GMC_BLANK_CUES_FOR_IMAGE_TRACK = 3
+        private const val GMC_REPORT_AFTER_LINES = 60
     }
 
     var isEnabled: Boolean = false
@@ -43,6 +45,48 @@ class SubtitleTranslationManager(
      * silently rendering the untranslated source language.
      */
     var onUntranslatableSource: (() -> Unit)? = null
+
+    // GMC: one blank cue on a real text track (an empty or styling-only cue) used to be enough to
+    // call the English source an image track, and AI moved to the next embedded track — Polish on
+    // a Married… with Children episode (14 Nov 2026), shown on screen in the middle of the episode.
+    // A source counts as untranslatable only when it has shown no text at all and several blank cues.
+    @Volatile private var gmcTextCues = 0
+    @Volatile private var gmcBlankCues = 0
+
+    /** A cue with text arrived from the current source. */
+    fun gmcNoteTextCue() { gmcTextCues++ }
+
+    /** A cue without text arrived; true when the source should now be treated as image-only. */
+    fun gmcNoteBlankCue(): Boolean {
+        gmcBlankCues++
+        return gmcTextCues == 0 && gmcBlankCues >= GMC_BLANK_CUES_FOR_IMAGE_TRACK
+    }
+
+    /** A new AI source was chosen: start counting again. */
+    fun gmcNewSource() {
+        gmcTextCues = 0
+        gmcBlankCues = 0
+        gmcMemoryLines = 0
+        gmcModelLines = 0
+        gmcReported = false
+    }
+
+    // GMC: once per episode, after the first [GMC_REPORT_AFTER_LINES] lines, say how many came
+    // from the memory server (already translated on some box) instead of the model.
+    var onGmcMemoryReport: ((fromMemory: Int, total: Int) -> Unit)? = null
+    @Volatile private var gmcMemoryLines = 0
+    @Volatile private var gmcModelLines = 0
+    @Volatile private var gmcReported = false
+
+    private fun gmcCount(fromMemory: Int, fromModel: Int) {
+        gmcMemoryLines += fromMemory
+        gmcModelLines += fromModel
+        val total = gmcMemoryLines + gmcModelLines
+        if (!gmcReported && total >= GMC_REPORT_AFTER_LINES) {
+            gmcReported = true
+            if (gmcMemoryLines > 0) onGmcMemoryReport?.invoke(gmcMemoryLines, total)
+        }
+    }
 
     val translatedCount: Int get() = cache.size
 
@@ -94,6 +138,7 @@ class SubtitleTranslationManager(
 
             // GMC: lines any box has translated before come from the memory server, free.
             val remembered = fromMemory(batch.map { it.text })
+            gmcCount(fromMemory = batch.count { it.text in remembered }, fromModel = batch.count { it.text !in remembered })
             if (remembered.isNotEmpty()) {
                 batch.removeAll { item ->
                     val known = remembered[item.text] ?: return@removeAll false
@@ -197,6 +242,7 @@ class SubtitleTranslationManager(
         val remembered = fromMemory(waiting)
         remembered.forEach { (text, translated) -> cache[text] = translated }
         val uncached = waiting.filter { it !in remembered }
+        gmcCount(fromMemory = waiting.size - uncached.size, fromModel = uncached.size)
         if (uncached.isEmpty()) return
         uncached.chunked(40).forEach { chunk ->
             prepareGlossary(chunk)
