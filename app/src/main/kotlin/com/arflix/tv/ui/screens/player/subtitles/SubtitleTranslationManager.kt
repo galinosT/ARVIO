@@ -246,15 +246,35 @@ class SubtitleTranslationManager(
         if (uncached.isEmpty()) return
         uncached.chunked(40).forEach { chunk ->
             prepareGlossary(chunk)
-            val result = service.translateBatch(chunk, targetLanguage)
-            if (result.success) {
-                onBatchResult?.invoke(true, null)
-                chunk.forEachIndexed { i, text ->
-                    cache[text] = result.lines.getOrElse(i) { text }
+            // Register the chunk as in flight so a cue reaching the screen meanwhile joins this
+            // request instead of the real-time queue sending the same line again.
+            val owned = chunk.mapNotNull { text ->
+                val deferred = CompletableDeferred<String>()
+                if (inFlight.putIfAbsent(text, deferred) == null) text to deferred else null
+            }.toMap()
+            var result: TranslationResult? = null
+            try {
+                // Nobody is waiting on the lookahead, so it can afford the repair request.
+                val r = service.translateBatch(chunk, targetLanguage, repairSuspects = true)
+                result = r
+                if (r.success) {
+                    onBatchResult?.invoke(true, null)
+                    chunk.forEachIndexed { i, text ->
+                        cache[text] = r.lines.getOrElse(i) { text }
+                    }
+                    remember(chunk, r)
+                } else {
+                    onBatchResult?.invoke(false, r.errorMessage)
                 }
-                remember(chunk, result)
-            } else {
-                onBatchResult?.invoke(false, result.errorMessage)
+            } finally {
+                // Waiters get the translation, or on failure/cancellation the original text
+                // (not cached, so the next render tries again), exactly like processBatches.
+                owned.forEach { (text, deferred) ->
+                    inFlight.remove(text, deferred)
+                    deferred.complete(cache[text] ?: text)
+                }
+            }
+            if (result?.success != true) {
                 delay(5_000L)
                 return
             }
