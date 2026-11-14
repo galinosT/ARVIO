@@ -44,6 +44,13 @@ internal class SteadyMapping(private val clockMs: () -> Long = { System.nanoTime
     private var lastDirection = 0
     private val reversals = ArrayDeque<Long>()
 
+    // GMC fine correction: see [gmcFine].
+    private var fineDone = false
+    private var finePendingMs: Long? = null
+    private var fineSinceMs = 0L
+    private var fineReports = 0
+    private var fineLastModel: SubtitleSyncModel? = null
+
     fun reset() {
         displayed = null
         settledSeen = false
@@ -53,6 +60,45 @@ internal class SteadyMapping(private val clockMs: () -> Long = { System.nanoTime
         seekUntilMs = Long.MIN_VALUE / 2
         lastDirection = 0
         reversals.clear()
+        fineDone = false
+        clearFine()
+    }
+
+    private fun clearFine() {
+        finePendingMs = null
+        fineReports = 0
+        fineLastModel = null
+    }
+
+    /**
+     * GMC: changes under [MIN_CHANGE_MS] stay hidden, so a lock that landed 0.2–0.4s off stayed
+     * that way for the whole episode. Once per lock, a small change is shown after all when the
+     * engine keeps finding it: [FINE_MIN_REPORTS] separate readings within [FINE_AGREE_MS] of each
+     * other, for [FINE_HOLD_MS]. A wobble around the current timing resets the wait.
+     */
+    private fun gmcFine(latest: SubtitleSyncModel, latestMs: Long, changeMs: Long): Decision {
+        if (fineDone || abs(changeMs) < FINE_MIN_MS) {
+            clearFine()
+            return Decision.Keep
+        }
+        val now = clockMs()
+        val pending = finePendingMs
+        if (pending == null || abs(latestMs - pending) > FINE_AGREE_MS) {
+            finePendingMs = latestMs
+            fineSinceMs = now
+            fineReports = 1
+            fineLastModel = latest
+            return Decision.Keep
+        }
+        if (latest !== fineLastModel) {
+            fineReports++
+            fineLastModel = latest
+        }
+        if (fineReports < FINE_MIN_REPORTS || now - fineSinceMs < FINE_HOLD_MS) return Decision.Keep
+        fineDone = true
+        clearFine()
+        lastChangeAtMs = now
+        return show(latest, changeMs)
     }
 
     /** The user jumped: the timing at the new place may be shown at once. */
@@ -76,8 +122,9 @@ internal class SteadyMapping(private val clockMs: () -> Long = { System.nanoTime
         val changeMs = latestMs - delayMs(current, positionMs)
         if (abs(changeMs) < MIN_CHANGE_MS) {
             pendingValueMs = null
-            return Decision.Keep
+            return gmcFine(latest, latestMs, changeMs)
         }
+        clearFine()
         val now = clockMs()
         val afterSeek = now < seekUntilMs
         val pending = pendingValueMs
@@ -100,6 +147,8 @@ internal class SteadyMapping(private val clockMs: () -> Long = { System.nanoTime
             return Decision.Froze
         }
         lastChangeAtMs = now
+        // A new timing may itself land a little off: it gets its own fine correction.
+        fineDone = false
         return show(latest, changeMs)
     }
 
@@ -117,6 +166,10 @@ internal class SteadyMapping(private val clockMs: () -> Long = { System.nanoTime
         const val SEEK_GRACE_MS = 20_000L
         const val MAX_REVERSALS = 3
         const val REVERSAL_WINDOW_MS = 4 * 60_000L
+        const val FINE_MIN_MS = 150L
+        const val FINE_AGREE_MS = 120L
+        const val FINE_HOLD_MS = 20_000L
+        const val FINE_MIN_REPORTS = 3
 
         fun delayMs(model: SubtitleSyncModel, positionMs: Long): Long = model.delayUsAt(positionMs * 1_000L) / 1_000L
     }

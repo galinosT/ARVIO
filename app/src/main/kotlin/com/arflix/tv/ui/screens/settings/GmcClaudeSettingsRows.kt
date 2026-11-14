@@ -52,6 +52,13 @@ import com.arflix.tv.ui.theme.TextSecondary
 /** TV settings row indices, after the existing ones (0–54). */
 internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63, 64)
 
+/** In Settings → Interface, after the Netflix-style Home switch. */
+internal val GMC_HOME_ROWS = listOf(65)
+
+private const val TITLE_SNAPPY = "Γρήγορες κινήσεις στην αρχική (GMC)"
+private const val DESC_SNAPPY =
+    "Netflix layout: πιο σύντομα και πιο άμεσα animations, και χωρίς animation όσο κρατάς πατημένο το βελάκι."
+
 private const val TITLE_SWITCH = "Claude Haiku (GMC)"
 private const val DESC_SWITCH =
     "Μετάφραση AI υποτίτλων με Claude Haiku αντί για το παραπάνω μοντέλο. Μόνο σε αυτή τη συσκευή."
@@ -86,6 +93,12 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
         61 -> showKeyDialog = true
         62 -> showStatsDialog = true
         63, 64 -> onGmcExtraRowClick(index)
+        65 -> {
+            com.arflix.tv.ui.screens.home.GmcHomeMotion.setEnabled(
+                context, !com.arflix.tv.ui.screens.home.GmcHomeMotion.isEnabled(context)
+            )
+            revision++
+        }
     }
 }
 
@@ -142,6 +155,14 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             GmcStatsDialogHost()
         }
         63, 64 -> GmcExtraTvRow(index, isFocused, modifier)
+        65 -> SettingsToggleRow(
+            title = TITLE_SNAPPY,
+            subtitle = DESC_SNAPPY,
+            isEnabled = remember(revision) { com.arflix.tv.ui.screens.home.GmcHomeMotion.isEnabled(context) },
+            isFocused = isFocused,
+            onToggle = { onGmcClaudeRowClick(context, 65) },
+            modifier = modifier,
+        )
         61 -> {
             SettingsRow(
                 icon = Icons.Default.VpnKey,

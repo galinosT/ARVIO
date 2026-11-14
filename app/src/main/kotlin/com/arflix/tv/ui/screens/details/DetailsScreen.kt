@@ -2128,6 +2128,11 @@ private fun DetailsContent(
         val isCompactHeight = configuration.screenHeightDp < 720
         val hasEpisodeRail = item.mediaType == MediaType.TV && (episodes.isNotEmpty() || isSeasonLoading)
         val compactEpisodeHero = isCompactHeight && hasEpisodeRail
+        // GMC: on a 540dp-tall TV the full hero leaves the episode rail too little height and the
+        // bottom of the cards (their descriptions) is cut off. While seasons or episodes are
+        // focused, the hero gives up the ratings row and two overview lines instead.
+        val gmcSlimHero = compactEpisodeHero &&
+            (focusSectionForUi == FocusSection.SEASONS || focusSectionForUi == FocusSection.EPISODES)
         val heroEndPadding = if (compactEpisodeHero) 240.dp else 400.dp
         val heroTopPadding = if (compactEpisodeHero) AppTopBarHeight else
             AppTopBarContentTopInset + if (isCompactHeight) 10.dp else 16.dp
@@ -2393,13 +2398,19 @@ private fun DetailsContent(
                         }
                     }
 
-                    if (externalRatings.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(7.dp))
-                        MdbExternalRatingsRow(
-                            ratings = externalRatings,
-                            centered = false,
-                            textShadow = textShadow
-                        )
+                    AnimatedVisibility(
+                        visible = externalRatings.isNotEmpty() && !gmcSlimHero,
+                        enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(7.dp))
+                            MdbExternalRatingsRow(
+                                ratings = externalRatings,
+                                centered = false,
+                                textShadow = textShadow
+                            )
+                        }
                     }
                 }
 
@@ -2413,6 +2424,7 @@ private fun DetailsContent(
                     modifier = Modifier
                         .width(minOf(820.dp, configuration.screenWidthDp.dp * 0.66f).coerceAtLeast(420.dp))
                         .heightIn(max = overviewMaxHeight)
+                        .animateContentSize()
                 ) {
                     Text(
                         text = displayOverview,
@@ -2424,7 +2436,7 @@ private fun DetailsContent(
                         ),
                         color = Color.White,
                         // Reserve a complete season/episode rail on compact-height TVs.
-                        maxLines = if (compactEpisodeHero) 3 else 4,
+                        maxLines = if (gmcSlimHero) 2 else if (compactEpisodeHero) 3 else 4,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -3219,6 +3231,7 @@ private fun DetailsEpisodeRail(
                         cardWidth = episodeCardWidth,
                         isFocused = isFocused && !episodeFixedFocus,
                         spoilerBlurEnabled = spoilerBlurEnabled,
+                        showFullDescription = isFocused,
                         onClick = onClickForEpisode
                     )
                 }
@@ -4173,6 +4186,8 @@ internal fun EpisodeCard(
     cardWidth: androidx.compose.ui.unit.Dp = 300.dp,
     isFocused: Boolean,
     spoilerBlurEnabled: Boolean = false,
+    // GMC: the episode under the cursor, even when the rail draws its focus ring as an overlay.
+    showFullDescription: Boolean = isFocused,
     onClick: () -> Unit = {}
 ) {
     val aspectRatio = 16f / 9f
@@ -4247,8 +4262,8 @@ internal fun EpisodeCard(
                         brush = Brush.verticalGradient(
                             colors = listOf(
                                 Color.Black.copy(alpha = 0.18f),
-                                Color.Black.copy(alpha = 0.05f),
-                                Color.Black.copy(alpha = 0.65f),
+                                Color.Black.copy(alpha = if (showFullDescription) 0.35f else 0.05f),
+                                Color.Black.copy(alpha = if (showFullDescription) 0.85f else 0.65f),
                                 Color.Black.copy(alpha = 0.95f)
                             )
                         )
@@ -4362,7 +4377,8 @@ internal fun EpisodeCard(
                         fontWeight = FontWeight.Medium
                     ),
                     color = Color.White.copy(alpha = 0.92f),
-                    maxLines = 3,
+                    // GMC: the focused episode shows its whole description, the rest a preview.
+                    maxLines = if (showFullDescription) 6 else 3,
                     overflow = TextOverflow.Ellipsis
                 )
             }

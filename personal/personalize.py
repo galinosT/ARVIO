@@ -9,7 +9,7 @@ build stops with a clear message instead of silently producing a wrong APK.
 
 What it changes:
   - package name, so the app installs next to the official ARVIO instead of clashing with it
-  - app name shown on the launcher
+  - app name shown on the launcher and in the settings version label (GMC V2.3.1.x)
   - version, so each build of this fork is newer than the last (for Obtainium / the in-app updater)
   - in-app updater points at this fork's GitHub releases instead of the official ones
   - Firebase/Crashlytics off: the bundled Firebase config belongs to the official app
@@ -101,11 +101,21 @@ def main():
     if renamed == 0:
         fail("no app_name string found")
 
+    labelled = 0
+    for strings in sorted((ROOT / "app" / "src" / "main" / "res").glob("values*/strings.xml")):
+        s = strings.read_text(encoding="utf-8")
+        new = re.sub(r'(<string name="settings_app_version_label"[^>]*>)ARVIO', rf"\g<1>{app_name}", s)
+        if new != s:
+            strings.write_text(new, encoding="utf-8")
+            labelled += 1
+    if labelled == 0:
+        fail("no settings_app_version_label string starting with ARVIO found")
+
     branded = apply_branding()
 
     print(f"personalize: package {package}, name '{app_name}', version {version} ({code}), "
           f"updates from {owner}/{name}, Firebase off, app_name set in {renamed} file(s), "
-          f"{branded} branding file(s)")
+          f"version label in {labelled} file(s), {branded} branding file(s)")
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:

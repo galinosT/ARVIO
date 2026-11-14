@@ -1769,6 +1769,8 @@ class TraktRepository @Inject constructor(
             val watchedSnapshot = watchedShowsDeferred.await()
             val watchedEpisodeKeys = watchedSnapshot.getOrNull()?.let(::traktWatchedEpisodeKeys)
                 ?: watchedEpisodesCache.toSet()
+            // GMC: last full play per episode, so a paused rewatch is not mistaken for a leftover.
+            val gmcLastWatched = watchedSnapshot.getOrNull()?.let { GmcRewatch.lastWatchedByEpisode(it) }.orEmpty()
             // Fetch actively paused playback items (sync/playback).
             val processedKeys = mutableSetOf<String>()
             var playbackFetched = false
@@ -1844,7 +1846,9 @@ class TraktRepository @Inject constructor(
                     if (key in processedKeys || showKey in processedKeys) continue
                     // Check if this episode is already watched
                     val epWatchedKey = "show_tmdb:$tmdbId:$season:$number"
-                    if (watchedEpisodeKeys.contains(epWatchedKey)) continue
+                    if (watchedEpisodeKeys.contains(epWatchedKey) &&
+                        !GmcRewatch.pauseIsNewer(gmcLastWatched[epWatchedKey], parseIso8601(item.pausedAt ?: ""))
+                    ) continue
                     candidates.add(
                         ContinueWatchingCandidate(
                             item = ContinueWatchingItem(
@@ -1948,16 +1952,30 @@ class TraktRepository @Inject constructor(
                                 return@withPermit null
                             }
 
-                            val nextEpisode = progress.nextEpisode ?: return@withPermit null
-                            if (progress.aired <= 0 || progress.completed >= progress.aired) return@withPermit null
-                            if (!includeSpecials && nextEpisode.season == 0) return@withPermit null
+                            // GMC: a show being watched again continues after the episode
+                            // played last, which Trakt's own next episode does not follow.
+                            val gmcRewatch = GmcRewatch.target(progress, watched, includeSpecials,
+                                System.currentTimeMillis())
+                            val nextEpisode = progress.nextEpisode
+                            if (gmcRewatch == null) {
+                                if (nextEpisode == null) return@withPermit null
+                                if (progress.aired <= 0 || progress.completed >= progress.aired) return@withPermit null
+                                if (!includeSpecials && nextEpisode.season == 0) return@withPermit null
+                            }
+                            val upSeason = gmcRewatch?.episode?.season ?: nextEpisode!!.season
+                            val upNumber = gmcRewatch?.episode?.number ?: nextEpisode!!.number
+                            val upTitle = if (gmcRewatch != null) null else nextEpisode?.title
 
                             val activityAt = progress.lastWatchedAt
                                 ?: watched.lastWatchedAt
                                 ?: watched.lastUpdatedAt
                                 ?: ""
                             val activityAtMs = parseIso8601(activityAt)
-                            val completionPercent = ((progress.completed.toFloat() / progress.aired.toFloat()) * 100f)
+                            val completionPercent = (if (gmcRewatch != null) {
+                                (gmcRewatch.position.toFloat() / gmcRewatch.total.coerceAtLeast(1).toFloat()) * 100f
+                            } else {
+                                (progress.completed.toFloat() / progress.aired.toFloat()) * 100f
+                            })
                                 .toInt()
                                 .coerceIn(0, 99)
                             ContinueWatchingCandidate(
@@ -1968,9 +1986,9 @@ class TraktRepository @Inject constructor(
                                     progress = completionPercent,
                                     resumePositionSeconds = 0L,
                                     durationSeconds = 0L,
-                                    season = nextEpisode.season,
-                                    episode = nextEpisode.number,
-                                    episodeTitle = nextEpisode.title,
+                                    season = upSeason,
+                                    episode = upNumber,
+                                    episodeTitle = upTitle,
                                     year = show.year?.toString() ?: "",
                                     isUpNext = true,
                                     // RemoteSyncManager uses this timestamp when

@@ -134,7 +134,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
 
-private const val NETFLIX_RAIL_MORPH_MS = 220
+// GMC: 220 ms as in ARVIO, or shorter with the snappy-Home switch on.
+private val NETFLIX_RAIL_MORPH_MS: Int get() = GmcHomeMotion.morphMs
 /** Margin past the vertical scroll before a row that left through the top collapses. */
 private const val NETFLIX_COLLAPSE_SETTLE_MS = 80
 /** Resting row titles draw at 17sp of the focused row's 20sp. */
@@ -223,6 +224,7 @@ internal fun handleNetflixHomeKey(
     onBillboardOpen: (MediaItem, Boolean) -> Unit,
     onOpenContextMenu: (MediaItem, Boolean) -> Unit
 ): Boolean? {
+    GmcHomeMotion.noteKey(event)
     val keyDown = event.type == KeyEventType.KeyDown
     val isSelect = event.key == Key.Enter || event.key == Key.DirectionCenter
     val isBack = event.key == Key.Back || event.key == Key.Escape
@@ -320,6 +322,8 @@ internal fun NetflixTvHomeRowsLayer(
     isSpecialItem: (MediaItem) -> Boolean,
     onItemClick: (MediaItem) -> Unit
 ) {
+    val gmcContext = LocalContext.current
+    remember { GmcHomeMotion.load(gmcContext) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeight = maxHeight
         val topInset = AppTopBarHeight + 6.dp
@@ -351,12 +355,14 @@ internal fun NetflixTvHomeRowsLayer(
                 listState.scrollBy(-1f)
                 target = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIndex }
             }
-            if (!reset && previousTarget >= 0 && target != null && abs(targetIndex - previousTarget) <= 4) {
+            if (!reset && previousTarget >= 0 && target != null && abs(targetIndex - previousTarget) <= 4 &&
+                !GmcHomeMotion.skipAnimation
+            ) {
                 verticalAnimating = true
                 try {
                     verticalOffset.snapTo(target.offset.toFloat())
                     listState.requestScrollToItem(targetIndex, -verticalOffset.value.roundToInt())
-                    verticalOffset.animateTo(0f, tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing)) {
+                    verticalOffset.animateTo(0f, tween(NETFLIX_RAIL_MORPH_MS, easing = GmcHomeMotion.easing)) {
                         listState.requestScrollToItem(targetIndex, -value.roundToInt())
                     }
                 } finally {
@@ -852,7 +858,7 @@ private fun NetflixContentRow(
     val expandedIndex = if (isCurrentRow) focusedItemIndex else restingItemIndex
     val focusedItem = items.getOrNull(expandedIndex)?.takeIf { expanded && !it.isPlaceholder }
     val sizeSpec: AnimationSpec<Dp> =
-        if (collapseOffScreen) snap() else tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing)
+        if (collapseOffScreen || GmcHomeMotion.skipAnimation) snap() else tween(NETFLIX_RAIL_MORPH_MS, easing = GmcHomeMotion.easing)
 
     // The focused title always sits in the first slot; a resting row keeps its position.
     val anchorIndex = (if (isCurrentRow) focusedItemIndex else restingItemIndex)
@@ -867,13 +873,13 @@ private fun NetflixContentRow(
         lastAnchor = anchorIndex
         appliedScrollReset = scrollResetRequest
         if (!reset && isCurrentRow && previousAnchor >= 0 &&
-            abs(anchorIndex - previousAnchor) <= 3 && visibleAnchor != null
+            abs(anchorIndex - previousAnchor) <= 3 && visibleAnchor != null && !GmcHomeMotion.skipAnimation
         ) {
             // Anchor the incoming card, not the outgoing item's changing width. A stock
             // scroll animation chases a moving destination while the old card shrinks.
             railOffset.snapTo(visibleAnchor.offset.toFloat())
             rowState.requestScrollToItem(anchorIndex, -railOffset.value.roundToInt())
-            railOffset.animateTo(0f, tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing)) {
+            railOffset.animateTo(0f, tween(NETFLIX_RAIL_MORPH_MS, easing = GmcHomeMotion.easing)) {
                 rowState.requestScrollToItem(anchorIndex, -value.roundToInt())
             }
         } else {
