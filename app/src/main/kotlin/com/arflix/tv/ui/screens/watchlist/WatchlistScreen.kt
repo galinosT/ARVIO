@@ -154,7 +154,7 @@ fun WatchlistScreen(
     val calendarTab = remember { FocusRequester() }
     var openedList by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(HomeServerLibrarySort.RECENTLY_ADDED) }
+    var sort by rememberSaveable { mutableStateOf(GMC_LIBRARY_DEFAULT_SORT) } // GMC: A to Z
     var mediaFilter by rememberSaveable { mutableStateOf<MediaType?>(null) }
     var filters by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf(false) }
@@ -465,7 +465,7 @@ fun WatchlistScreen(
                                 onClick = { sourcesOpen = false; filters = false; search = true }
                             )
                         }
-                        val hasActiveFilters = mediaFilter != null || sort != HomeServerLibrarySort.RECENTLY_ADDED
+                        val hasActiveFilters = mediaFilter != null || sort != GMC_LIBRARY_DEFAULT_SORT
                         OledControl(
                             label = tr("Filters"),
                             compact = true,
@@ -688,13 +688,13 @@ fun WatchlistScreen(
             }
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (mediaFilter != null || sort != HomeServerLibrarySort.RECENTLY_ADDED) {
+                if (mediaFilter != null || sort != GMC_LIBRARY_DEFAULT_SORT) {
                     OledControl(
                         tr("Reset"),
                         compact = touch,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            sort = HomeServerLibrarySort.RECENTLY_ADDED
+                            sort = GMC_LIBRARY_DEFAULT_SORT
                             mediaFilter = null
                         }
                     )
@@ -702,7 +702,7 @@ fun WatchlistScreen(
                 OledControl(
                     tr("Refresh"),
                     compact = touch,
-                    modifier = if (mediaFilter != null || sort != HomeServerLibrarySort.RECENTLY_ADDED) Modifier.weight(1f) else Modifier.fillMaxWidth(),
+                    modifier = if (mediaFilter != null || sort != GMC_LIBRARY_DEFAULT_SORT) Modifier.weight(1f) else Modifier.fillMaxWidth(),
                     onClick = { if(serverMode) viewModel.refreshLibrary() else viewModel.refresh() }
                 )
             }

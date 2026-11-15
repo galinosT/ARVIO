@@ -6,6 +6,18 @@ import java.time.LocalDate
 
 private val YEAR_REGEX = Regex("\\d{4}")
 
+/** GMC: every Library list opens sorted A to Z. */
+internal val GMC_LIBRARY_DEFAULT_SORT = HomeServerLibrarySort.TITLE
+
+private val LEADING_ARTICLE = Regex("^(the|a|an)\\s+", RegexOption.IGNORE_CASE)
+
+/** GMC: A to Z ignoring case, accents and a leading "The", "A" or "An" ("The Office" under O). */
+private val titleCollator: java.text.Collator = java.text.Collator.getInstance(java.util.Locale.ROOT).apply {
+    strength = java.text.Collator.PRIMARY
+}
+
+private fun sortKey(title: String): String = title.trim().replace(LEADING_ARTICLE, "")
+
 private fun MediaItem.libraryReleaseDate(): LocalDate? {
     val fullDate = releaseDate?.take(10)?.let {
         try { LocalDate.parse(it) } catch (_: Exception) { null }
@@ -20,7 +32,7 @@ internal fun sortLibraryItems(items: List<MediaItem>, sort: HomeServerLibrarySor
     return when (sort) {
         // Preserve the tracker/source's existing explicit ordering by default.
         HomeServerLibrarySort.RECENTLY_ADDED -> items
-        HomeServerLibrarySort.TITLE -> items.sortedBy { it.title.lowercase() }
+        HomeServerLibrarySort.TITLE -> items.sortedWith(compareBy(titleCollator) { sortKey(it.title) })
         HomeServerLibrarySort.RATING -> items.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
         HomeServerLibrarySort.RELEASE_DATE_NEWEST, HomeServerLibrarySort.RELEASE_DATE_OLDEST -> {
             val dates = items.associateWith { it.libraryReleaseDate() }
