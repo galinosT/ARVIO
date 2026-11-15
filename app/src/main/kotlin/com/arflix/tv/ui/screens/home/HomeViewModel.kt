@@ -1836,6 +1836,7 @@ class HomeViewModel @Inject constructor(
         val sourceType = when (provider) {
             PersonalListsRepository.Provider.TRAKT -> CatalogSourceType.TRAKT
             PersonalListsRepository.Provider.MDBLIST -> CatalogSourceType.MDBLIST
+            PersonalListsRepository.Provider.SIMKL -> CatalogSourceType.SIMKL
         }
         // The rows belong to the profile and Home load they started on. A profile switch or a
         // new Home load while they are fetched makes them stale: they are dropped, not merged

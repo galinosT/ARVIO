@@ -142,4 +142,60 @@ class SimklListsRepository @Inject constructor(
                 list.url, list.ownerName, list.ownerId?.toString(), list.updatedAt, list.count, list.likes, list.posters)
         }
     }
+
+    // ── GMC: "Add to list" on the user's own Simkl lists ────────────────────────────────────
+
+    /** Runs [block] with the access token, refreshing it once on a 401 (as [load] does). */
+    private suspend fun <T> withToken(profile: String, block: suspend (String) -> T): T {
+        var grant = grant(profile)
+        return try { block(grant.accessToken) } catch (e: SimklListsException) {
+            if (e.status != 401) throw e
+            grant = client.refresh(grant.refreshToken).copy(userId = grant.userId, connectionId = grant.connectionId)
+            save(profile, grant)
+            block(grant.accessToken)
+        }
+    }
+
+    private suspend fun ownUserId(profile: String): Long {
+        read(profile)?.userId?.let { return it }
+        val id = withToken(profile) { client.userId(it) }
+        read(profile)?.let { save(profile, it.copy(userId = id)) }
+        return id
+    }
+
+    /** The user's own regular lists (not auto lists, not followed ones): the ones that take items. */
+    suspend fun ownEditableLists(): List<SimklCustomList> = mutex.withLock {
+        val profile = profileId()
+        if (read(profile) == null) return@withLock emptyList()
+        val userId = ownUserId(profile)
+        withToken(profile) { client.userLists(userId, it) }
+            .filter { !it.auto && (it.ownerId == null || it.ownerId == userId) }
+    }
+
+    /** Whether one of the user's lists holds the title (fresh copy after an edit, cached otherwise). */
+    suspend fun listContains(listId: Long, tmdbId: Int, imdbId: String?, isMovie: Boolean): Boolean {
+        val list = load(listId)
+        return list.items.any { item ->
+            val sameType = if (isMovie) item.type.startsWith("movie") else !item.type.startsWith("movie")
+            sameType && (item.tmdb == tmdbId || (imdbId != null && item.imdb == imdbId))
+        }
+    }
+
+    /**
+     * Adds the title to the list or removes it. A TV title goes in as a show and, when Simkl files
+     * it as anime, once more as anime. True when Simkl made the change (or it was already so).
+     */
+    suspend fun modifyMembership(listId: Long, tmdbId: Int, imdbId: String?, isMovie: Boolean, add: Boolean): Boolean {
+        val profile = profileId()
+        val result = mutex.withLock {
+            var r = withToken(profile) { client.modifyItems(listId, if (isMovie) "movies" else "shows", tmdbId, imdbId, add, it) }
+            if (!isMovie && r.changed == 0 && (r.wrongType || r.notFound)) {
+                r = withToken(profile) { client.modifyItems(listId, "anime", tmdbId, imdbId, add, it) }
+            }
+            cache.remove("$profile:$listId")
+            indexCache.remove(profile)
+            r
+        }
+        return result.changed > 0 || (add && result.existing > 0)
+    }
 }

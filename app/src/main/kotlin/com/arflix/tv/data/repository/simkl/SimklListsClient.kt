@@ -44,7 +44,7 @@ data class SimklListsDeviceCode(val deviceCode: String, val userCode: String, va
 data class SimklListsGrant(val accessToken: String, val refreshToken: String, val expiresAt: Long, val userId: Long? = null,
     val connectionId: String = java.util.UUID.randomUUID().toString())
 
-/** Read-only custom-list API. This deliberately never fetches simkl.com HTML. */
+/** Custom-list API (GMC adds item writes). This deliberately never fetches simkl.com HTML. */
 class SimklListsClient(
     private val http: OkHttpClient, private val clientId: String,
     private val baseUrl: HttpUrl = "https://api.simkl.com/".toHttpUrl(),
@@ -117,6 +117,34 @@ class SimklListsClient(
     suspend fun officialLists(token: String): List<SimklCustomList> =
         (userLists(5, token, previewOnly = true) + userLists(5, token, previewOnly = true, sort = "popularity")).distinctBy { it.id }
 
+    /** GMC: what one add/remove call did. [wrongType]: Simkl files the title under another media type. */
+    data class Modification(val changed: Int, val existing: Int, val wrongType: Boolean, val notFound: Boolean)
+
+    /**
+     * GMC: adds the title to, or removes it from, one of the user's own lists (POST /lists/{id}/items
+     * or …/items/remove; PRO/VIP, `media:write`). [arrayKey] is "movies", "shows" or "anime" — Simkl
+     * takes the media type from the array the title is in.
+     */
+    suspend fun modifyItems(listId: Long, arrayKey: String, tmdbId: Int, imdbId: String?, add: Boolean, token: String): Modification {
+        require(listId > 0)
+        val ids = JsonObject().apply {
+            addProperty("tmdb", tmdbId)
+            imdbId?.takeIf { it.startsWith("tt") }?.let { addProperty("imdb", it) }
+        }
+        val payload = JsonObject().apply {
+            add(arrayKey, com.google.gson.JsonArray().apply { add(JsonObject().apply { add("ids", ids) }) })
+        }
+        val body = request(if (add) "lists/$listId/items" else "lists/$listId/items/remove", token, jsonBody = gson.toJson(payload))
+        fun count(key: String) = body.get(key)?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+        fun nonEmpty(key: String) = body.get(key)?.let { it.isJsonArray && it.asJsonArray.size() > 0 } == true
+        return Modification(
+            changed = if (add) count("added") + count("updated") else count("deleted"),
+            existing = count("existing"),
+            wrongType = nonEmpty("wrong_type"),
+            notFound = nonEmpty("not_found"),
+        )
+    }
+
     private fun pages(body: JsonObject): Int = (body.getAsJsonObject("pagination")?.number("total_pages") ?: 1).coerceAtLeast(1)
 
     private fun parseList(body: JsonObject): SimklCustomList {
@@ -142,7 +170,7 @@ class SimklListsClient(
     }
 
     private suspend fun request(path: String, token: String? = null, query: Map<String, String> = emptyMap(),
-        form: Map<String, String>? = null, jsonPost: Boolean = false): JsonObject = withContext(Dispatchers.IO) {
+        form: Map<String, String>? = null, jsonPost: Boolean = false, jsonBody: String? = null): JsonObject = withContext(Dispatchers.IO) {
         if (clientId.isBlank()) throw SimklListsException("invalid_client")
         val url = baseUrl.newBuilder().addPathSegments(path).addQueryParameter("client_id", clientId)
             .addQueryParameter("app-name", "arvio").addQueryParameter("app-version", version)
@@ -151,6 +179,7 @@ class SimklListsClient(
         token?.let { builder.header("Authorization", "Bearer $it") }
         if (form != null) builder.post(FormBody.Builder().apply { form.forEach { (key, value) -> add(key, value) } }.build())
         if (jsonPost) builder.post("{}".toRequestBody("application/json".toMediaType()))
+        if (jsonBody != null) builder.post(jsonBody.toRequestBody("application/json".toMediaType()))
         val call = http.newCall(builder.build())
         if (path == "oauth2/revoke") call.timeout().timeout(5, java.util.concurrent.TimeUnit.SECONDS)
         call.execute().use { response ->

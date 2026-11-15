@@ -266,6 +266,7 @@ class WatchlistViewModel @Inject constructor(
                 val provider = when (list.provider) {
                     PersonalListsRepository.Provider.TRAKT -> TrackerLibraryProvider.TRAKT
                     PersonalListsRepository.Provider.MDBLIST -> TrackerLibraryProvider.MDBLIST
+                    PersonalListsRepository.Provider.SIMKL -> TrackerLibraryProvider.SIMKL
                 }
                 val sourceId = WatchlistSourceItem.TrackerList(provider, list.id, list.title).id
                 sourceItemsCache.remove(sourceId)

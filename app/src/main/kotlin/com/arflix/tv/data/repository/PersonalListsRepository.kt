@@ -16,16 +16,19 @@ import javax.inject.Singleton
 /**
  * The user's own lists on the connected tracking services, for "Add to list".
  *
- * Trakt and MDBList can both be connected; their lists are shown together, tagged with
+ * Trakt, MDBList and (GMC) Simkl can all be connected; their lists are shown together, tagged with
  * the service they live on. Only lists that can take items are offered (MDBList's
  * dynamic, filter-based lists cannot).
  */
 @Singleton
 class PersonalListsRepository @Inject constructor(
     private val traktRepository: TraktRepository,
-    private val mdbListRepository: MdbListRepository
+    private val mdbListRepository: MdbListRepository,
+    // GMC: the user's own Simkl lists (PRO/VIP), through the device's Simkl V2 connection.
+    private val simklListsRepository: com.arflix.tv.data.repository.simkl.SimklListsRepository,
+    private val mediaRepository: MediaRepository,
 ) {
-    enum class Provider(val label: String) { TRAKT("Trakt"), MDBLIST("MDBList") }
+    enum class Provider(val label: String) { TRAKT("Trakt"), MDBLIST("MDBList"), SIMKL("Simkl") }
 
     data class UserList(val provider: Provider, val id: String, val title: String) {
         val key: String get() = "${provider.name}:$id"
@@ -36,7 +39,8 @@ class PersonalListsRepository @Inject constructor(
 
     /** Whether any service with personal lists is connected for the active profile. */
     suspend fun hasProvider(): Boolean =
-        traktRepository.isAuthenticated.first() || mdbListRepository.isConnected()
+        traktRepository.isAuthenticated.first() || mdbListRepository.isConnected() ||
+            simklListsRepository.isConnected()
 
     /** Every list with the title's membership, loaded in parallel. */
     suspend fun choicesFor(mediaType: MediaType, tmdbId: Int): List<Choice> = coroutineScope {
@@ -62,7 +66,33 @@ class PersonalListsRepository @Inject constructor(
                 }
             }.awaitAll()
         }
-        trakt.await() + mdb.await()
+        val simkl = async {
+            if (!simklListsRepository.isConnected()) return@async emptyList()
+            val imdb = mediaRepository.getCachedImdbId(mediaType, tmdbId)
+            val isMovie = mediaType == MediaType.MOVIE
+            // A free Simkl account cannot have custom lists: no lists, not an error.
+            runCatching { simklListsRepository.ownEditableLists() }.getOrDefault(emptyList())
+                .filter { list -> simklListFits(list.mediaType, isMovie) }
+                .map { list ->
+                    async {
+                        val contains = runCatching {
+                            simklListsRepository.listContains(list.id, tmdbId, imdb, isMovie)
+                        }.getOrDefault(false)
+                        Choice(UserList(Provider.SIMKL, list.id.toString(), list.name), contains)
+                    }
+                }.awaitAll()
+        }
+        trakt.await() + mdb.await() + simkl.await()
+    }
+
+    /** A Simkl list typed for movies takes no shows and the other way round; mixed lists take both. */
+    private fun simklListFits(listType: String, isMovie: Boolean): Boolean {
+        val type = listType.lowercase()
+        return when {
+            type.startsWith("movie") -> isMovie
+            type.startsWith("show") || type.startsWith("tv") || type.startsWith("anime") -> !isMovie
+            else -> true
+        }
     }
 
     /** An MDBList list for the Library; [path] is "user/slug", as in its mdblist.com URL. */
@@ -100,6 +130,13 @@ class PersonalListsRepository @Inject constructor(
             Provider.MDBLIST -> list.id.toLongOrNull()
                 ?.let { mdbListRepository.modifyList(it, mediaType, tmdbId, add) }
                 ?: false
+            Provider.SIMKL -> list.id.toLongOrNull()?.let { id ->
+                runCatching {
+                    simklListsRepository.modifyMembership(
+                        id, tmdbId, mediaRepository.getCachedImdbId(mediaType, tmdbId), mediaType == MediaType.MOVIE, add
+                    )
+                }.getOrDefault(false)
+            } ?: false
         }
         if (ok) {
             // The edited list must not be answered from a cached copy on its next load.
