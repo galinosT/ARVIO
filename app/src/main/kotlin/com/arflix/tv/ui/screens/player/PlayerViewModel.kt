@@ -5225,8 +5225,8 @@ class PlayerViewModel @Inject constructor(
                 val chosen = bestAlt ?: return@let primary
                 // GMC: the alternate only shows that the subtitle and that track share ONE timing,
                 // not that it is the video's. Two and a Half Men S02E20 REMUX (Nov 2026): the Greek
-                // subtitle fitted the "English (SDH) | SRT" track as authored, both ~1.3–4s off,
-                // while the plain English track — the one AI translation used, spot on — lost.
+                // subtitle "fitted" the "English (SDH) | SRT" track as authored while it was 1–4s off
+                // the plain English track — the one AI translation used, spot on — which lost.
                 // The disc's own image track settles it: whichever text track starts its lines
                 // where the disc does is the timed one.
                 val gmcImage = gmcImageTrackStarts
@@ -5246,7 +5246,12 @@ class PlayerViewModel @Inject constructor(
                             ", ${chosen.first.label} " +
                             (vsAlt?.let { "${it.shiftMs}ms thirds=${it.thirds.joinToString("/")} pairs=${it.pairs}/${chosen.first.cues.size}" } ?: "unmeasured")
                     )
-                    if (fits(vsPrimary, gmcPrimaryCues.size) && !fits(vsAlt, chosen.first.cues.size)) {
+                    // Second run on the same file showed BOTH English tracks start their lines where
+                    // the disc does (4ms, every line paired): neither is mistimed, so the alternate's
+                    // higher score only meant its extra SDH lines happened to overlap the Greek
+                    // subtitle's — not that the built-in track was off. Whenever the disc confirms
+                    // the preferred track, the "preferred track is mistimed" premise is false.
+                    if (fits(vsPrimary, gmcPrimaryCues.size)) {
                         Log.i("SubMatch", "[gmc] the disc sides with the preferred track — keeping it as the reference")
                         matchStep("2· GMC: the disc's own track confirms the built-in reference — keeping it")
                         return@let primary
