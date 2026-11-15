@@ -135,6 +135,14 @@ fun WatchlistScreen(
     val poster = rememberCardLayoutMode() == CardLayoutMode.POSTER
     val scrollScope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(LibrarySection.WATCHLISTS) }
+    // GMC: the Calendar tab can be switched off in Settings → Interface.
+    val gmcContext = androidx.compose.ui.platform.LocalContext.current
+    remember { GmcLibraryPrefs.load(gmcContext) }
+    val showCalendarTab = GmcLibraryPrefs.showCalendar
+    if (!showCalendarTab && section == LibrarySection.CALENDAR) section = LibrarySection.WATCHLISTS
+    val visibleSections = remember(showCalendarTab) {
+        LibrarySection.entries.filter { showCalendarTab || it != LibrarySection.CALENDAR }
+    }
     val calendarMode = section == LibrarySection.CALENDAR
     val cloudProvider = when (section) {
         LibrarySection.CLOUD -> com.arflix.tv.data.gmc.GmcCloud.Provider.PREMIUMIZE
@@ -311,7 +319,7 @@ fun WatchlistScreen(
                 .heightIn(min = 48.dp)
                 .padding(bottom = if(compact) 10.dp else 6.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
-                LibrarySection.entries.forEachIndexed { index, entry ->
+                visibleSections.forEachIndexed { index, entry ->
                     OledControl(tr(entry.label), selected = section == entry,
                         modifier = (if(index == 0) Modifier.focusRequester(firstTab).onGloballyPositioned {
                             if(!touch && !initialFocusPlaced) { initialFocusPlaced = true; firstTab.requestFocus() }

@@ -53,11 +53,14 @@ import com.arflix.tv.ui.theme.TextSecondary
 internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63, 64)
 
 /** In Settings → Interface, after the Netflix-style Home switch. */
-internal val GMC_HOME_ROWS = listOf(65)
+internal val GMC_HOME_ROWS = listOf(65, 66)
 
 private const val TITLE_SNAPPY = "Γρήγορες κινήσεις στην αρχική (GMC)"
 private const val DESC_SNAPPY =
     "Netflix layout: πιο σύντομα και πιο άμεσα animations, και χωρίς animation όσο κρατάς πατημένο το βελάκι."
+
+private const val TITLE_CALENDAR = "Ημερολόγιο στη Βιβλιοθήκη (GMC)"
+private const val DESC_CALENDAR = "Δείχνει την καρτέλα Calendar στη Βιβλιοθήκη. Μόνο σε αυτή τη συσκευή."
 
 private const val TITLE_SWITCH = "Claude Haiku (GMC)"
 private const val DESC_SWITCH =
@@ -97,6 +100,12 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
             com.arflix.tv.ui.screens.home.GmcHomeMotion.setEnabled(
                 context, !com.arflix.tv.ui.screens.home.GmcHomeMotion.isEnabled(context)
             )
+            revision++
+        }
+        66 -> {
+            val prefs = com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs
+            prefs.load(context)
+            prefs.setShowCalendar(context, !prefs.showCalendar)
             revision++
         }
     }
@@ -161,6 +170,17 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             isEnabled = remember(revision) { com.arflix.tv.ui.screens.home.GmcHomeMotion.isEnabled(context) },
             isFocused = isFocused,
             onToggle = { onGmcClaudeRowClick(context, 65) },
+            modifier = modifier,
+        )
+        66 -> SettingsToggleRow(
+            title = TITLE_CALENDAR,
+            subtitle = DESC_CALENDAR,
+            isEnabled = remember(revision) {
+                com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.load(context)
+                com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.showCalendar
+            },
+            isFocused = isFocused,
+            onToggle = { onGmcClaudeRowClick(context, 66) },
             modifier = modifier,
         )
         61 -> {
