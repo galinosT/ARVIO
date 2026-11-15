@@ -14,6 +14,10 @@ internal object GmcLibraryPrefs {
     private const val KEY_CALENDAR = "library_calendar"
     private const val KEY_SERVERS = "library_servers"
     private const val KEY_LIBRARY_ONLY = "library_only_catalogs"
+    private const val KEY_HOME_ONLY = "home_only_catalogs"
+
+    /** Ids of catalogs kept on Home only — not listed in the Library. */
+    val homeOnlyIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
 
     /** Ids of catalogs kept in the Library only — not shown as Home rows. Bumped on every change. */
     val libraryOnlyIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
@@ -31,6 +35,7 @@ internal object GmcLibraryPrefs {
         showCalendar = prefs.getBoolean(KEY_CALENDAR, true)
         showServers = prefs.getBoolean(KEY_SERVERS, true)
         libraryOnlyIds.value = prefs.getStringSet(KEY_LIBRARY_ONLY, emptySet()).orEmpty().toSet()
+        homeOnlyIds.value = prefs.getStringSet(KEY_HOME_ONLY, emptySet()).orEmpty().toSet()
     }
 
     fun setShowCalendar(context: Context, show: Boolean) {
@@ -56,5 +61,18 @@ internal object GmcLibraryPrefs {
         if (next == libraryOnlyIds.value) return
         libraryOnlyIds.value = next
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putStringSet(KEY_LIBRARY_ONLY, next).apply()
+    }
+
+    fun isHomeOnly(context: Context, catalogId: String): Boolean {
+        load(context)
+        return catalogId in homeOnlyIds.value
+    }
+
+    fun setHomeOnly(context: Context, catalogId: String, homeOnly: Boolean) {
+        load(context)
+        val next = if (homeOnly) homeOnlyIds.value + catalogId else homeOnlyIds.value - catalogId
+        if (next == homeOnlyIds.value) return
+        homeOnlyIds.value = next
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putStringSet(KEY_HOME_ONLY, next).apply()
     }
 }

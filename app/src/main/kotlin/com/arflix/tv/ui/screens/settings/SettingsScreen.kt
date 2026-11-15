@@ -663,6 +663,8 @@ fun SettingsScreen(
     var renameCatalogTitle by remember { mutableStateOf("") }
     // GMC: "Library only" for a catalog the Library lists (null: the switch is not offered).
     var renameLibraryOnly by remember { mutableStateOf<Boolean?>(null) }
+    // GMC: "Home only" — the catalog stays a Home row but is not listed in the Library.
+    var renameHomeOnly by remember { mutableStateOf(false) }
 
     // Catalog Pack states
     var showCatalogPackInput by remember { mutableStateOf(false) }
@@ -1006,6 +1008,7 @@ fun SettingsScreen(
                 catalog.sourceType != com.arflix.tv.data.model.CatalogSourceType.PREINSTALLED &&
                 catalog.sourceType != com.arflix.tv.data.model.CatalogSourceType.HOME_SERVER
             ) com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.isLibraryOnly(context, catalog.id) else null
+            renameHomeOnly = com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.isHomeOnly(context, catalog.id)
             showCatalogRename = true
         }
     }
@@ -2994,13 +2997,24 @@ fun SettingsScreen(
                 fields = listOf(
                     InputField(label = stringResource(R.string.settings_label_title), value = renameCatalogTitle, onValueChange = { renameCatalogTitle = it })
                 ),
+                // The two switches exclude each other: a catalog on neither screen would vanish.
                 toggleFields = renameLibraryOnly?.let { libraryOnly ->
-                    listOf(ToggleField("Μόνο στη Βιβλιοθήκη (όχι στην αρχική)", libraryOnly) { renameLibraryOnly = it })
+                    listOf(
+                        ToggleField("Μόνο στη Βιβλιοθήκη (όχι στην αρχική)", libraryOnly) {
+                            renameLibraryOnly = it
+                            if (it) renameHomeOnly = false
+                        },
+                        ToggleField("Μόνο στην αρχική (όχι στη Βιβλιοθήκη)", renameHomeOnly) {
+                            renameHomeOnly = it
+                            if (it) renameLibraryOnly = false
+                        },
+                    )
                 }.orEmpty(),
                 onConfirm = {
                     if (renameCatalogTitle.isNotBlank()) {
                         renameLibraryOnly?.let {
                             com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.setLibraryOnly(context, renameCatalogId, it)
+                            com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.setHomeOnly(context, renameCatalogId, renameHomeOnly)
                         }
                         viewModel.renameCatalog(renameCatalogId, renameCatalogTitle)
                         showCatalogRename = false

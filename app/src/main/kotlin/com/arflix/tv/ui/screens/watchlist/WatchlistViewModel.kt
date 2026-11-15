@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -260,6 +261,12 @@ class WatchlistViewModel @Inject constructor(
     private val trackerListsReload = MutableStateFlow(0)
 
     init {
+        // GMC: a catalog switched to or from "Home only" leaves or rejoins the Library at once.
+        viewModelScope.launch {
+            GmcLibraryPrefs.load(context)
+            GmcLibraryPrefs.homeOnlyIds.drop(1).collect { updateAvailableSources() }
+        }
+
         // A list edited through "Add to list" must not be shown from this screen's cache.
         viewModelScope.launch {
             personalListsRepository.changes.collect { list ->
@@ -730,8 +737,10 @@ class WatchlistViewModel @Inject constructor(
         if (catalogs != null) currentCatalogs = catalogs
         if (homeServerCandidates != null) currentHomeServerCandidates = homeServerCandidates
 
+        // GMC: catalogs set to "Home only" are not Library lists.
+        val gmcHomeOnly = GmcLibraryPrefs.also { it.load(context) }.homeOnlyIds.value
         val allSources = buildWatchlistSources(
-            catalogs = currentCatalogs,
+            catalogs = currentCatalogs.filterNot { it.id in gmcHomeOnly },
             homeServerCandidates = currentHomeServerCandidates,
             trackerLists = currentTrackerLists
         )
