@@ -5223,6 +5223,35 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
                 val chosen = bestAlt ?: return@let primary
+                // GMC: the alternate only shows that the subtitle and that track share ONE timing,
+                // not that it is the video's. Two and a Half Men S02E20 REMUX (Nov 2026): the Greek
+                // subtitle fitted the "English (SDH) | SRT" track as authored, both ~1.3–4s off,
+                // while the plain English track — the one AI translation used, spot on — lost.
+                // The disc's own image track settles it: whichever text track starts its lines
+                // where the disc does is the timed one.
+                val gmcImage = gmcImageTrackStarts
+                val gmcPrimaryCues = primaryTimeline?.cues
+                if (gmcImage != null && gmcPrimaryCues != null) {
+                    val vsPrimary = com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.measure(gmcPrimaryCues.map { it.startMs }, gmcImage.second)
+                    val vsAlt = com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.measure(chosen.first.cues.map { it.startMs }, gmcImage.second)
+                    // Most of the track's lines must pair: an image track also lists every "clear"
+                    // event, and a track that is off by a constant can half-pair with those.
+                    fun fits(m: com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.Measurement?, lines: Int) =
+                        m != null && m.consistent && kotlin.math.abs(m.shiftMs) < GMC_IMAGE_FIT_MS &&
+                            m.pairs >= lines * GMC_IMAGE_MIN_PAIRED
+                    Log.i(
+                        "SubMatch",
+                        "[gmc] image track #${gmcImage.first} as witness: preferred " +
+                            (vsPrimary?.let { "${it.shiftMs}ms thirds=${it.thirds.joinToString("/")} pairs=${it.pairs}/${gmcPrimaryCues.size}" } ?: "unmeasured") +
+                            ", ${chosen.first.label} " +
+                            (vsAlt?.let { "${it.shiftMs}ms thirds=${it.thirds.joinToString("/")} pairs=${it.pairs}/${chosen.first.cues.size}" } ?: "unmeasured")
+                    )
+                    if (fits(vsPrimary, gmcPrimaryCues.size) && !fits(vsAlt, chosen.first.cues.size)) {
+                        Log.i("SubMatch", "[gmc] the disc sides with the preferred track — keeping it as the reference")
+                        matchStep("2· GMC: the disc's own track confirms the built-in reference — keeping it")
+                        return@let primary
+                    }
+                }
                 Log.i(
                     "SubMatch",
                     "[alt-ref] ${chosen.first.label} accepts a subtitle as authored — the preferred " +
@@ -6768,6 +6797,15 @@ class PlayerViewModel @Inject constructor(
             Log.w("SubMatch", "matroska index failed: ${error.message}")
         }.getOrNull() ?: return emptyList()
         val timeline = indexed
+        // GMC: the disc's own image track (PGS/VobSub), the fullest one in the reference's language
+        // if any — an independent witness when two text tracks disagree (see the [alt-ref] check).
+        gmcImageTrackStarts = timeline.tracks
+            .filter { com.arflix.tv.ui.screens.player.subtitles.MatroskaSubtitleIndex.isImageTrack(it) && it.cues.size >= 50 }
+            .sortedWith(compareByDescending<com.arflix.tv.ui.screens.player.subtitles.MatroskaSubtitleIndex.IndexedTrack> {
+                normalizeLanguage(it.language.orEmpty()) == normalizeLanguage(reference.lang)
+            }.thenByDescending { it.cues.size })
+            .firstOrNull()
+            ?.let { track -> track.trackNumber to track.cues.map { it.startMs } }
         if (timeline.tracks.isEmpty()) {
             com.arflix.tv.ui.screens.player.subtitles.MatroskaSubtitleIndex
                 .pickTrackForLanguage(timeline.sparseTracks, reference.lang)
@@ -8537,6 +8575,8 @@ class PlayerViewModel @Inject constructor(
     private var focusedStreamPrewarmJob: Job? = null
     private var streamSelectionJob: Job? = null
     private var currentProvidedStreamUrl: String? = null
+    /** GMC: (track number, cue starts) of the file's image subtitle track, from the last index read. */
+    private var gmcImageTrackStarts: Pair<Long, List<Long>>? = null
     private var currentProvidedIptvSourceId: String? = null
     private var iptvBusyOnProvidedPath = false
     private var iptvSkipCheckOnce = false
@@ -9083,6 +9123,9 @@ class PlayerViewModel @Inject constructor(
         private const val MATCH_AI_CANDIDATE_LINES = 40  // candidate window sent per request
         private const val MATCH_AI_MIN_PAIRS = 3         // fewer pairs than this can't measure an offset
         // GMC: an AI-measured offset this large, confirmed by the line starts, overrules an alternate reference.
+        // GMC: a text track whose line starts sit within this of the disc's image track is timed to the video.
+        private const val GMC_IMAGE_FIT_MS = 300L
+        private const val GMC_IMAGE_MIN_PAIRED = 0.7
         private const val GMC_ALT_OVERRULE_MIN_MS = 500L
         private const val GMC_ALT_OVERRULE_AGREE_MS = 700L
         private const val MATCH_AI_OUTLIER_MS = 450L     // pairs this far from the median are mis-pairings
