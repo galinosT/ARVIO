@@ -4883,6 +4883,9 @@ class PlayerViewModel @Inject constructor(
             var alternateReferenceInUse = false
             // GMC: the preferred track's refs, kept when an alternate replaces them (GmcFineSync note below).
             var gmcPrimaryRefs: List<Pair<Long, Long>>? = null
+            // GMC: the disc's image track showed the preferred text track starts its lines where the
+            // disc does — it is the video's timing, and a measurement against it is a true one.
+            var gmcPrimaryDiscConfirmed = false
             // Set when the reference is a TEXT track read through the index without a text
             // reference in the player (the forced-flagged fallback) — the retimer may use it.
             var textIndexReference = false
@@ -5252,6 +5255,7 @@ class PlayerViewModel @Inject constructor(
                     // subtitle's — not that the built-in track was off. Whenever the disc confirms
                     // the preferred track, the "preferred track is mistimed" premise is false.
                     if (fits(vsPrimary, gmcPrimaryCues.size)) {
+                        gmcPrimaryDiscConfirmed = true
                         Log.i("SubMatch", "[gmc] the disc sides with the preferred track — keeping it as the reference")
                         matchStep("2· GMC: the disc's own track confirms the built-in reference — keeping it")
                         return@let primary
@@ -5293,7 +5297,17 @@ class PlayerViewModel @Inject constructor(
                 if (primary == null || (builtInReference == null && !textIndexReference) || alternateReferenceInUse ||
                     current.any { it.offsetMs == 0L && it.score >= MATCH_RETIME_SKIP_SCORE }
                 ) return@let current
-                val references = (listOf(primary) + alternateRefs).take(MATCH_RETIME_MAX_REFERENCES)
+                // GMC: when the disc confirms the preferred track, an alternate adds no timing the
+                // preferred lacks — only its own extra lines. Two and a Half Men S02E20: retimed
+                // against the preferred track the Greek subtitle came out right (served 2.0→6.4s,
+                // the very drift the line starts showed); against the SDH track, whose sound-effect
+                // lines the retimer paired with dialogue, it came out 2.5s early at the start — and
+                // won as the "tighter fit". With the disc behind the preferred track, use only it.
+                val references = (if (gmcPrimaryDiscConfirmed) listOf(primary) else listOf(primary) + alternateRefs)
+                    .take(MATCH_RETIME_MAX_REFERENCES)
+                if (gmcPrimaryDiscConfirmed && alternateRefs.isNotEmpty()) {
+                    Log.i("SubMatch", "[gmc] retiming against the disc-confirmed track only (alternates skipped)")
+                }
                 fun signature(cues: List<SubtitleSyncMatcher.TimedCue>) = cues.size to cues.map { it.startMs }.hashCode()
                 val distinct = loaded.distinctBy { (_, cues) -> signature(cues) }.take(MATCH_RETIME_MAX_CANDIDATES)
                 matchStep("3· re-timing ${distinct.size} subtitles against ${references.size} reference tracks…")
@@ -5671,8 +5685,10 @@ class PlayerViewModel @Inject constructor(
                         // The Shards S01E08 (Sept 2026): 7/8 lines paired at 1:27, the retimed
                         // subtitle 4.6s late, and the retime was served anyway — "really off".
                         // Rejected, the scan ends unverified and the audio sync takes over.
+                        // GMC: or when the disc confirmed the track the model reads — then its
+                        // measurement is the video's timing, whichever track the retime used.
                         aiTarget.retime != null && !alternateReferenceInUse && aiOffset != null &&
-                            aiTarget.retime.referenceLabel == primaryTimeline?.label &&
+                            (aiTarget.retime.referenceLabel == primaryTimeline?.label || gmcPrimaryDiscConfirmed) &&
                             kotlin.math.abs(aiOffset) > MATCH_AI_RETIME_VETO_MS -> {
                             Log.w(
                                 "SubMatch",
