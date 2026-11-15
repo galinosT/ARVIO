@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.arflix.tv.data.gmc.GmcCloud
 import com.arflix.tv.ui.screens.settings.GmcDialogButton
+import com.arflix.tv.ui.screens.settings.gmcToast
+import kotlinx.coroutines.launch
 import com.arflix.tv.ui.skin.resolveAccentColor
 import com.arflix.tv.ui.theme.BackgroundElevated
 import com.arflix.tv.ui.theme.Pink
@@ -64,22 +66,25 @@ import java.util.Date
 import java.util.Locale
 
 /*
- * GMC personal build: the "Premiumize" tab in the Library — folders and videos in the user's
- * Premiumize cloud (GmcCloud), newest first; OK on a video plays it in GMC's player.
+ * GMC personal build: the "Premiumize" and "TorBox" tabs in the Library — folders and videos in the
+ * user's debrid cloud (GmcCloud), newest first; OK on a video plays it in GMC's player.
  */
 
 private data class CloudFolder(val id: String?, val name: String)
 
 @Composable
 internal fun GmcCloudPane(
+    provider: GmcCloud.Provider,
     onPlay: (url: String, name: String, mediaId: Int, startPositionMs: Long?) -> Unit,
     onExitUp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var apiKey by remember { mutableStateOf(GmcCloud.apiKey(context)) }
+    var apiKey by remember(provider) { mutableStateOf(GmcCloud.apiKey(context, provider)) }
     var showKeyDialog by remember { mutableStateOf(false) }
-    val path = remember { mutableStateListOf(CloudFolder(null, "Premiumize")) }
+    val path = remember(provider) { mutableStateListOf(CloudFolder(null, provider.label)) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var opening by remember { mutableStateOf<String?>(null) }
     var listing by remember { mutableStateOf<GmcCloud.Listing?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -93,7 +98,7 @@ internal fun GmcCloudPane(
             listing = null; error = null; return@LaunchedEffect
         }
         loading = true; error = null
-        GmcCloud.list(context, current.id)
+        GmcCloud.list(context, provider, current.id)
             .onSuccess { listing = it; listState.scrollToItem(0) }
             .onFailure { listing = null; error = it.message ?: "Σφάλμα σύνδεσης" }
         loading = false
@@ -111,13 +116,13 @@ internal fun GmcCloudPane(
             if (apiKey.isNotBlank()) {
                 OledControl("Ανανέωση", onClick = { reload++ })
             }
-            OledControl(if (apiKey.isBlank()) "Σύνδεση Premiumize" else "Κλειδί", onClick = { showKeyDialog = true })
+            OledControl(if (apiKey.isBlank()) "Σύνδεση ${provider.label}" else "Κλειδί", onClick = { showKeyDialog = true })
         }
         Spacer(Modifier.height(12.dp))
         when {
             apiKey.isBlank() -> CloudMessage(
-                "Σύνδεσε τον λογαριασμό σου στο Premiumize για να βλέπεις εδώ τα αρχεία σου.\n" +
-                    "Θα χρειαστείς το API key από το premiumize.me → Account."
+                "Σύνδεσε τον λογαριασμό σου στο ${provider.label} για να βλέπεις εδώ τα αρχεία σου.\n" +
+                    "Θα χρειαστείς το API key από το ${provider.keyHint}."
             )
             loading && listing == null -> CloudMessage("Φόρτωση…")
             error != null -> CloudMessage(error!!)
@@ -131,7 +136,8 @@ internal fun GmcCloudPane(
                 itemsIndexed(listing?.items.orEmpty(), key = { _, it -> it.id }) { index, item ->
                     CloudRow(
                         item = item,
-                        resumeMs = if (item.isFolder) 0L else GmcCloud.resumePositionMs(context, GmcCloud.mediaIdFor(item.id)),
+                        resumeMs = if (item.isFolder) 0L else GmcCloud.resumePositionMs(context, GmcCloud.mediaIdFor(provider, item.id)),
+                        busy = opening == item.id,
                         modifier = (if (index == 0) Modifier.focusRequester(firstRow) else Modifier)
                             .onPreviewKeyEvent { e ->
                                 if (index == 0 && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp) {
@@ -141,9 +147,18 @@ internal fun GmcCloudPane(
                         onClick = {
                             if (item.isFolder) {
                                 path.add(CloudFolder(item.id, item.name))
-                            } else item.link?.let { link ->
-                                val mediaId = GmcCloud.mediaIdFor(item.id)
-                                onPlay(link, item.name, mediaId, GmcCloud.resumePositionMs(context, mediaId).takeIf { it > 0 })
+                            } else if (opening == null) {
+                                // TorBox links are requested on play (they expire); Premiumize has one already.
+                                opening = item.id
+                                scope.launch {
+                                    GmcCloud.resolveLink(context, provider, item)
+                                        .onSuccess { link ->
+                                            val mediaId = GmcCloud.mediaIdFor(provider, item.id)
+                                            onPlay(link, item.name, mediaId, GmcCloud.resumePositionMs(context, mediaId).takeIf { it > 0 })
+                                        }
+                                        .onFailure { gmcToast(context, it.message ?: "Δεν άνοιξε το αρχείο") }
+                                    opening = null
+                                }
                             }
                         },
                     )
@@ -153,11 +168,12 @@ internal fun GmcCloudPane(
     }
 
     if (showKeyDialog) {
-        PremiumizeKeyDialog(
+        CloudKeyDialog(
+            provider = provider,
             current = apiKey,
             onSave = { key ->
-                GmcCloud.setApiKey(context, key)
-                apiKey = GmcCloud.apiKey(context)
+                GmcCloud.setApiKey(context, provider, key)
+                apiKey = GmcCloud.apiKey(context, provider)
                 path.removeRange(1, path.size)
                 showKeyDialog = false
             },
@@ -172,7 +188,7 @@ private fun CloudMessage(text: String) {
 }
 
 @Composable
-private fun CloudRow(item: GmcCloud.Item, resumeMs: Long, modifier: Modifier, onClick: () -> Unit) {
+private fun CloudRow(item: GmcCloud.Item, resumeMs: Long, busy: Boolean, modifier: Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val accent = resolveAccentColor(Color.White)
     val foreground = if (focused) { if (accent.luminance() > .4f) Color.Black else Color.White } else Color.White
@@ -180,7 +196,8 @@ private fun CloudRow(item: GmcCloud.Item, resumeMs: Long, modifier: Modifier, on
         if (item.createdAt > 0) SimpleDateFormat("d MMM yyyy", Locale("el")).format(Date(item.createdAt * 1000)) else ""
     }
     val details = listOfNotNull(
-        GmcCloud.formatSize(item.sizeBytes).takeIf { !item.isFolder && it.isNotBlank() },
+        "Άνοιγμα…".takeIf { busy },
+        GmcCloud.formatSize(item.sizeBytes).takeIf { it.isNotBlank() },
         date.takeIf { it.isNotBlank() },
         resumeMs.takeIf { it > 0 }?.let { "συνέχεια από ${formatClock(it)}" },
     ).joinToString("  ·  ")
@@ -214,7 +231,7 @@ private fun formatClock(ms: Long): String {
 }
 
 @Composable
-private fun PremiumizeKeyDialog(current: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CloudKeyDialog(provider: GmcCloud.Provider, current: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var value by remember(current) { mutableStateOf(current) }
     val inputFocus = remember { FocusRequester() }
     BackHandler { onDismiss() }
@@ -230,10 +247,10 @@ private fun PremiumizeKeyDialog(current: String, onSave: (String) -> Unit, onDis
                 .background(BackgroundElevated)
                 .padding(24.dp)
         ) {
-            Text("Κλειδί Premiumize (GMC)", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Κλειδί ${provider.label} (GMC)", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Από το premiumize.me → Account → API key. Μένει μόνο σε αυτή τη συσκευή. Άφησέ το κενό για αποσύνδεση.",
+                "Από το ${provider.keyHint}. Μένει μόνο σε αυτή τη συσκευή. Άφησέ το κενό για αποσύνδεση.",
                 color = TextSecondary, fontSize = 12.sp,
             )
             Spacer(Modifier.height(16.dp))
@@ -251,8 +268,8 @@ private fun PremiumizeKeyDialog(current: String, onSave: (String) -> Unit, onDis
             )
             Spacer(Modifier.height(12.dp))
             com.arflix.tv.ui.components.GmcPhoneQr(
-                title = "Κλειδί Premiumize",
-                fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("Premiumize API key", secret = true)),
+                title = "Κλειδί ${provider.label}",
+                fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("${provider.label} API key", secret = true)),
                 onValues = { values -> values.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { value = it } },
                 qrSize = 96.dp,
             )
