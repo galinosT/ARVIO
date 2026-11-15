@@ -782,7 +782,7 @@ fun SettingsScreen(
             "catalogs" -> uiState.catalogs.size + 2 // Add + Import + Built-in collections toggle + catalogs
             "stremio" -> stremioAddons.size + 2 // rows + refresh + community + add button
             "plugins" -> pluginsMaxIndex
-            "accounts" -> 21 // Includes About & Credits and device-local usage opt-in.
+            "accounts" -> GMC_ACCOUNTS_EXPORT_INDEX // Includes About & Credits, usage opt-in and GMC's export / import.
             else -> 0
         }
     }
@@ -1881,6 +1881,7 @@ fun SettingsScreen(
                                                 19 -> openExternalUrl(context, ACCOUNT_DELETION_URL)
                                                 20 -> showCredits = true
                                                 21 -> viewModel.setUsageStatisticsEnabled(!uiState.usageStatisticsEnabled)
+                                                GMC_ACCOUNTS_EXPORT_INDEX -> onGmcExtraRowClick(64)
                                             }
                                         }
                                         "plugins" -> {
@@ -10727,6 +10728,13 @@ private fun AccountsSettings(
             isFocused = focusedIndex == 21,
             onToggle = onUsageStatisticsToggle,
             modifier = Modifier.settingsFocusSlot(21)
+        )
+        // GMC: settings export / import (and full mirror) belongs with the account, not the subtitles.
+        Spacer(modifier = Modifier.height(16.dp))
+        GmcExtraTvRow(
+            index = 64,
+            isFocused = focusedIndex == GMC_ACCOUNTS_EXPORT_INDEX,
+            modifier = Modifier.settingsFocusSlot(GMC_ACCOUNTS_EXPORT_INDEX),
         )
     }
 }

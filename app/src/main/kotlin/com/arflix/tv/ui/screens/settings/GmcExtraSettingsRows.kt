@@ -243,6 +243,9 @@ private fun GmcExportDialogHost() {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf<String?>(null) }
+    // Full mirror: also this box's device-local settings and keys. Read by the phone server's thread.
+    var mirror by remember { mutableStateOf(false) }
+    val mirrorNow = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val dismiss = { showExportDialog = false }
     val fileName = remember {
         "gmc-settings-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".json"
@@ -252,10 +255,21 @@ private fun GmcExportDialogHost() {
             text = "Σκάναρε το QR με το κινητό: «Λήψη αρχείου» σώζει τις ρυθμίσεις αυτού του κουτιού " +
                 "(addons, catalogs, προφίλ, ρυθμίσεις). Σε άλλο κουτί, άνοιξε το ίδιο παράθυρο και στείλε " +
                 "το αρχείο από το κινητό για επαναφορά.\n\n" +
-                "Το αρχείο περιέχει κλειδιά και κωδικούς (API keys, IPTV) — κράτα το ιδιωτικό. " +
-                "Το κλειδί Claude και ο server μνήμης δεν περιλαμβάνονται.",
+                "Με το «Πλήρες mirror» το αρχείο παίρνει και ό,τι μένει μόνο στη συσκευή: κλειδί Claude, " +
+                "server μνήμης, Premiumize/TorBox, διακόπτες Βιβλιοθήκης, λεξικά σειρών. Οι συνδέσεις " +
+                "Simkl Lists και Trakt δεν αντιγράφονται — κάθε κουτί συνδέεται μόνο του.\n\n" +
+                "Το αρχείο περιέχει κλειδιά και κωδικούς — κράτα το ιδιωτικό.",
             style = ArflixTypography.caption, color = TextSecondary,
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        GmcDialogButton(
+            if (mirror) "Πλήρες mirror: ΝΑΙ (με κλειδιά συσκευής)" else "Πλήρες mirror: ΟΧΙ",
+            if (mirror) Pink else TextSecondary,
+            Modifier.fillMaxWidth(),
+        ) {
+            mirror = !mirror
+            mirrorNow.set(mirror)
+        }
         Spacer(modifier = Modifier.height(12.dp))
         GmcPhoneQr(
             title = TITLE_EXPORT,
@@ -263,7 +277,12 @@ private fun GmcExportDialogHost() {
             onValues = {},
             download = GmcPhoneServer.Download(fileName) {
                 // Served on the phone server's own thread: building the snapshot there is fine.
-                runBlocking { cloudSync(context).buildCloudSnapshotJson() }
+                val snapshot = runBlocking { cloudSync(context).buildCloudSnapshotJson() }
+                if (!mirrorNow.get()) snapshot else runCatching {
+                    org.json.JSONObject(snapshot)
+                        .put(com.arflix.tv.data.gmc.GmcDeviceMirror.JSON_KEY, com.arflix.tv.data.gmc.GmcDeviceMirror.export(context))
+                        .toString()
+                }.getOrDefault(snapshot)
             },
             onUpload = { content -> pending = content },
             hint = "Σκάναρε για λήψη ή επαναφορά ρυθμίσεων από το κινητό.",
@@ -288,9 +307,21 @@ private fun GmcExportDialogHost() {
                 GmcDialogButton("Επαναφορά", Pink, Modifier.weight(1f)) {
                     status = "Επαναφορά…"
                     scope.launch {
-                        val result = cloudSync(context).gmcImportSnapshot(incoming)
+                        // A full-mirror file carries this box's device-local half too.
+                        val root = runCatching { org.json.JSONObject(incoming) }.getOrNull()
+                        val device = root?.optJSONObject(com.arflix.tv.data.gmc.GmcDeviceMirror.JSON_KEY)
+                        val snapshot = if (root != null && device != null) {
+                            root.remove(com.arflix.tv.data.gmc.GmcDeviceMirror.JSON_KEY)
+                            root.toString()
+                        } else incoming
+                        val result = cloudSync(context).gmcImportSnapshot(snapshot).mapCatching {
+                            if (device != null) com.arflix.tv.data.gmc.GmcDeviceMirror.import(context, device)
+                        }
                         status = result.fold(
-                            onSuccess = { "Οι ρυθμίσεις επανήλθαν ✓ — κάνε επανεκκίνηση της εφαρμογής." },
+                            onSuccess = {
+                                if (device != null) "Πλήρες mirror ✓ (μαζί με τα κλειδιά συσκευής) — κάνε επανεκκίνηση της εφαρμογής."
+                                else "Οι ρυθμίσεις επανήλθαν ✓ — κάνε επανεκκίνηση της εφαρμογής."
+                            },
                             onFailure = { "Η επαναφορά απέτυχε: ${it.message}" },
                         )
                         if (result.isSuccess) pending = null

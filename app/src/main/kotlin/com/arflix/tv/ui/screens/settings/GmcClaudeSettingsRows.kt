@@ -50,7 +50,10 @@ import com.arflix.tv.ui.theme.TextSecondary
  */
 
 /** TV settings row indices, after the existing ones (0–54). */
-internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63, 64)
+internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63)
+
+/** GMC: the settings export / import row sits last in Settings → Accounts, at this focus index. */
+internal const val GMC_ACCOUNTS_EXPORT_INDEX = 22
 
 /** In Settings → Interface, after the Netflix-style Home switch. */
 internal val GMC_HOME_ROWS = listOf(65, 66, 67)
