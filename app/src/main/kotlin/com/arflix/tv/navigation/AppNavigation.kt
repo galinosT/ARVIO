@@ -395,7 +395,18 @@ fun AppNavigation(
                         onSwitchProfile()
                         navController.navigateToProfileSelection()
                     },
-                    onBack = { navigateHome() }
+                    onBack = { navigateHome() },
+                    onPlayCloudFile = { url, name, mediaId, startPositionMs ->
+                        navController.navigate(
+                            Screen.Player.createRoute(
+                                mediaType = MediaType.MOVIE,
+                                mediaId = mediaId,
+                                streamUrl = url,
+                                preferredSourceName = name,
+                                startPositionMs = startPositionMs,
+                            )
+                        )
+                    },
                 )
             }
         }

@@ -1141,7 +1141,10 @@ class PlayerViewModel @Inject constructor(
                         android.util.Log.w("PlayerViewModel", "load child '$name' failed: ${e.message}")
                     }
                 }
-                launch {
+                val gmcCloudFile = com.arflix.tv.data.gmc.GmcCloud.isCloudId(mediaId)
+                // Nothing else to look for: one file, one source.
+                if (gmcCloudFile) _uiState.value = _uiState.value.copy(sourceSearchActive = false)
+                if (!gmcCloudFile) launch {
                     kotlinx.coroutines.delay(1_500L)
                     runCatching {
                         populateStreamsForProvidedUrl(
@@ -1157,7 +1160,7 @@ class PlayerViewModel @Inject constructor(
                 // Load IPTV and home-server sources from cache in parallel so the
                 // source picker in the player shows alternatives immediately.
                 homeServerAppendJob?.cancel()
-                if (!isYouTubeVideo() && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.HOME_SERVER)) {
+                if (!gmcCloudFile && !isYouTubeVideo() && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.HOME_SERVER)) {
                     homeServerAppendJob = launch {
                         try {
                             runCatching {
@@ -1177,7 +1180,7 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
                 vodAppendJob?.cancel()
-                if (!isYouTubeVideo() && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.IPTV_VOD)) {
+                if (!gmcCloudFile && !isYouTubeVideo() && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.IPTV_VOD)) {
                     vodAppendJob = launch {
                         try {
                             runCatching {
@@ -1197,7 +1200,7 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
                 // Fetch metadata in background
-                launch {
+                if (!gmcCloudFile) launch {
                     runCatching { fetchMediaMetadata(mediaType, mediaId) }
                         .onFailure(childFailed("metadata"))
                 }
@@ -7890,6 +7893,10 @@ class PlayerViewModel @Inject constructor(
         navigationStartPositionMs: Long?
     ): ResumeData {
         val navStart = navigationStartPositionMs?.coerceAtLeast(0L) ?: 0L
+        // GMC: a Premiumize file keeps its own resume point, nothing in history or Trakt.
+        if (com.arflix.tv.data.gmc.GmcCloud.isCloudId(mediaId)) {
+            return ResumeData(positionMs = navStart.takeIf { it > 0 } ?: com.arflix.tv.data.gmc.GmcCloud.resumePositionMs(context, mediaId))
+        }
 
         val cloudEntry = watchHistoryRepository.getProgress(mediaType, mediaId, seasonNumber, episodeNumber)
         val cloudPositionMs = cloudEntry?.let { entry ->
@@ -8181,6 +8188,11 @@ class PlayerViewModel @Inject constructor(
         closing: Boolean = false
     ): Job? {
         if (progressDiscardedForIdle || duration <= 0) return null
+        // GMC: Premiumize files are not catalog titles — no scrobble, history or Continue Watching.
+        if (com.arflix.tv.data.gmc.GmcCloud.isCloudId(currentMediaId)) {
+            com.arflix.tv.data.gmc.GmcCloud.saveResume(context, currentMediaId, position, duration)
+            return null
+        }
         noteRecentSourcePlayback(position, isPlaying)
 
         // A completion transaction must not be cancelled/restarted by the ended polling tick

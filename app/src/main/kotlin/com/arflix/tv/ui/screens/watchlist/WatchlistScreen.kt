@@ -84,7 +84,7 @@ import com.arflix.tv.ui.theme.BackgroundDark
 import com.arflix.tv.ui.theme.BackgroundElevated
 import java.time.LocalDate
 
-internal enum class LibrarySection(val label: String) { WATCHLISTS("Watchlists"), LISTS("My lists"), SERVERS("Homeserver"), CALENDAR("Calendar") }
+internal enum class LibrarySection(val label: String) { WATCHLISTS("Watchlists"), LISTS("My lists"), SERVERS("Homeserver"), CALENDAR("Calendar"), CLOUD("Premiumize") }
 internal val LibraryTabsTopInset = AppTopBarHeight - 8.dp
 @OptIn(ExperimentalFoundationApi::class)
 private object LibraryTvBringIntoViewSpec : BringIntoViewSpec {
@@ -100,7 +100,7 @@ internal fun librarySources(sources: List<WatchlistSourceItem>, section: Library
         LibrarySection.WATCHLISTS -> it is WatchlistSourceItem.MyWatchlist || (it is WatchlistSourceItem.TrackerList && !it.isPersonalCollection())
         LibrarySection.LISTS -> it.isPersonalCollection()
         LibrarySection.SERVERS -> it is WatchlistSourceItem.HomeServer
-        LibrarySection.CALENDAR -> false
+        LibrarySection.CALENDAR, LibrarySection.CLOUD -> false
     } }
 
 @OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -118,7 +118,9 @@ fun WatchlistScreen(
     onCalendarSelectSource: (String) -> Unit = {},
     onCalendarRefresh: () -> Unit = {},
     calendarViewModel: ReleaseCalendarViewModel? = null,
-    onCalendarOpenRelease: ((com.arflix.tv.data.model.CalendarRelease) -> Unit)? = null
+    onCalendarOpenRelease: ((com.arflix.tv.data.model.CalendarRelease) -> Unit)? = null,
+    // GMC: OK on a Premiumize video (GmcCloudPane).
+    onPlayCloudFile: (url: String, name: String, mediaId: Int, startPositionMs: Long?) -> Unit = { _, _, _, _ -> },
 ) {
     val rawState by viewModel.uiState.collectAsStateWithLifecycle()
     val rawServers by viewModel.libraryState.collectAsStateWithLifecycle()
@@ -134,6 +136,8 @@ fun WatchlistScreen(
     val scrollScope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(LibrarySection.WATCHLISTS) }
     val calendarMode = section == LibrarySection.CALENDAR
+    val cloudMode = section == LibrarySection.CLOUD
+    val cloudTab = remember { FocusRequester() }
     val calendarTab = remember { FocusRequester() }
     var openedList by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -306,10 +310,11 @@ fun WatchlistScreen(
                     OledControl(tr(entry.label), selected = section == entry,
                         modifier = (if(index == 0) Modifier.focusRequester(firstTab).onGloballyPositioned {
                             if(!touch && !initialFocusPlaced) { initialFocusPlaced = true; firstTab.requestFocus() }
-                        } else if (entry == LibrarySection.CALENDAR) Modifier.focusRequester(calendarTab) else Modifier), compact = compact,
+                        } else if (entry == LibrarySection.CALENDAR) Modifier.focusRequester(calendarTab)
+                        else if (entry == LibrarySection.CLOUD) Modifier.focusRequester(cloudTab) else Modifier), compact = compact,
                         onClick = { selectSection(entry) })
                 }
-                if (!compact && !calendarMode) {
+                if (!compact && !calendarMode && !cloudMode) {
                     Spacer(Modifier.weight(1f))
                     val serverTotal = servers.totalCount.takeIf { serverMode && mediaFilter == null }
                     Text(if(collections) "${scopeSources.size} ${tr("lists")}" else "${serverTotal ?: items.size}${if(serverTotal == null && hasMore) "+" else ""} ${tr("titles")}", color = Color.LightGray, fontSize = 13.sp)
@@ -318,7 +323,13 @@ fun WatchlistScreen(
                     OledControl(tr("Filters"), modifier = Modifier.focusRequester(filterButton), onClick = { sourcesOpen = false; filters = true })
                 }
             }
-            if (calendarMode) {
+            if (cloudMode) {
+                GmcCloudPane(
+                    onPlay = onPlayCloudFile,
+                    onExitUp = { cloudTab.requestFocus() },
+                    modifier = Modifier.weight(1f),
+                )
+            } else if (calendarMode) {
                 if (calendarStateOverride != null) LibraryCalendarPane(
                     state = calendarStateOverride, onSelectDate = onCalendarSelectDate,
                     onChangeMonth = onCalendarChangeMonth, onSelectSource = onCalendarSelectSource,
