@@ -18,10 +18,10 @@
 # Log stripping for release builds
 # Remove debug/verbose/info logs for maximum performance
 # ============================================
+# GMC: Log.i stays, so `adb logcat -s SubMatch` shows every step of a subtitle decision.
 -assumenosideeffects class android.util.Log {
     public static int v(...);
     public static int d(...);
-    public static int i(...);
 }
 
 # Also strip debug/verbose/info custom AppLogger methods

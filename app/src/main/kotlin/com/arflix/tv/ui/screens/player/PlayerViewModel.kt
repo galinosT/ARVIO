@@ -4878,6 +4878,8 @@ class PlayerViewModel @Inject constructor(
             // Set when an alternate replaced the reference: the text track AI reads is then no
             // longer the timing reference, so AI can still vouch for the dialogue but not the timing.
             var alternateReferenceInUse = false
+            // GMC: the preferred track's refs, kept when an alternate replaces them (GmcFineSync note below).
+            var gmcPrimaryRefs: List<Pair<Long, Long>>? = null
             // Set when the reference is a TEXT track read through the index without a text
             // reference in the player (the forced-flagged fallback) — the retimer may use it.
             var textIndexReference = false
@@ -5224,6 +5226,7 @@ class PlayerViewModel @Inject constructor(
                         "track is mistimed; scoring against the alternate instead"
                 )
                 matchStep("2· built-in reference looks mistimed — timing against ${chosen.first.label} instead")
+                gmcPrimaryRefs = referenceRefs
                 referenceRefs = chosen.first.refs
                 alternateReferenceInUse = true
                 chosen.second
@@ -5582,6 +5585,7 @@ class PlayerViewModel @Inject constructor(
                      */
                     suspend fun improvesStrictly(offsetMs: Long): Boolean =
                         scoreAt(offsetMs, toleranceMs = 0L) > scoreAt(0L, toleranceMs = 0L) + MATCH_AI_MIN_GAIN
+                    var gmcOverrule: com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.Measurement? = null
                     fun replaceTarget(score: Double, offsetMs: Long) {
                         results = results?.map {
                             if (it === aiTarget) ScoredCandidate(it.sub, score, offsetMs) else it
@@ -5652,6 +5656,47 @@ class PlayerViewModel @Inject constructor(
                         // Same for a retimer verdict: that pairing covered the whole file, and
                         // a few buffered lines' median shift cannot overrule it — least of all a
                         // speed correction, where no single offset is right.
+                        // GMC: the alternate reference can be the wrong one. It was chosen because a
+                        // subtitle fitted it as authored and fitted the preferred track at no shift;
+                        // a subtitle that is late or early by the SAME amount as a loosely-timed
+                        // alternate does exactly that. Two and a Half Men S02E20 REMUX (Nov 2026):
+                        // the Greek subtitle ~1.5s early, the model measured 1500ms against the
+                        // English track on paired lines, the alternate "accepted" it as authored, and
+                        // it was served uncorrected — while AI translation timed by that same English
+                        // track was spot on. So when the model's offset is large and the subtitle's
+                        // line starts show ONE constant offset against the preferred track that agrees
+                        // with it, the preferred track is right: go back to it and take the shift.
+                        alternateReferenceInUse && aiTarget.retime == null && aiOffset != null &&
+                            outcome == com.arflix.tv.ui.screens.player.subtitles.AiVerdict.CONFIRMED &&
+                            gmcPrimaryRefs != null &&
+                            kotlin.math.abs(aiOffset) >= GMC_ALT_OVERRULE_MIN_MS &&
+                            com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.measure(
+                                // The whole episode when the index read it; the model only saw a few lines.
+                                targetCues.map { it.startMs },
+                                (primaryTimeline?.cues ?: referenceCues).map { it.startMs }
+                            )?.takeIf {
+                                it.consistent && kotlin.math.abs(it.shiftMs) >= GMC_ALT_OVERRULE_MIN_MS &&
+                                    kotlin.math.abs(it.shiftMs - aiOffset) <= GMC_ALT_OVERRULE_AGREE_MS
+                            }?.also { gmcOverrule = it } != null -> {
+                            val m = gmcOverrule!!
+                            Log.i(
+                                "SubMatch",
+                                "[gmc] alternate reference overruled: AI ${aiOffset}ms and line starts ${m.shiftMs}ms " +
+                                    "(thirds=${m.thirds.joinToString("/")}, ${m.pairs} pairs) agree against the preferred track"
+                            )
+                            referenceRefs = gmcPrimaryRefs!!
+                            alternateReferenceInUse = false
+                            // The whole-episode measurement, not the model's few lines, sets the shift.
+                            val score = scoreAt(m.shiftMs)
+                            Log.i(
+                                "SubMatch",
+                                "[gmc] \"${aiTarget.sub.label}\" shifted ${m.shiftMs}ms on the preferred track " +
+                                    "(score ${"%.2f".format(score)})"
+                            )
+                            matchStep("3· GMC: preferred track and AI agree — shifting ${formatMatchOffset(m.shiftMs)}")
+                            replaceTarget(score, m.shiftMs)
+                        }
+
                         alternateReferenceInUse || aiTarget.retime != null ->
                             Log.i(
                                 "SubMatch",
@@ -9025,6 +9070,9 @@ class PlayerViewModel @Inject constructor(
         private const val MATCH_AI_REFERENCE_LINES = 8   // reference lines sent per request
         private const val MATCH_AI_CANDIDATE_LINES = 40  // candidate window sent per request
         private const val MATCH_AI_MIN_PAIRS = 3         // fewer pairs than this can't measure an offset
+        // GMC: an AI-measured offset this large, confirmed by the line starts, overrules an alternate reference.
+        private const val GMC_ALT_OVERRULE_MIN_MS = 500L
+        private const val GMC_ALT_OVERRULE_AGREE_MS = 700L
         private const val MATCH_AI_OUTLIER_MS = 450L     // pairs this far from the median are mis-pairings
         /**
          * Paired lines the model needs before its playhead measurement is the audio sync's check.

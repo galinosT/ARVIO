@@ -176,13 +176,18 @@ class SubtitleTranslationService(
     ): List<LineMatch>? {
         if (referenceLines.isEmpty() || candidateLines.isEmpty()) return null
         val apiKey = apiKeyProvider()
-        if (apiKey.isBlank()) return null
+        if (apiKey.isBlank() && claudeKeyProvider().isBlank()) return null
         val prompt = buildMatchPrompt()
         val payload = "REFERENCE:\n${encodeIndexed(referenceLines, " ")}\n\nCANDIDATE:\n${encodeIndexed(candidateLines, " ")}"
-        val raw = when (modelProvider()) {
+        // GMC: with Claude on, the line-matching check goes to Haiku too (better at pairing Greek
+        // with English); Gemini/Groq only when no Claude key is active.
+        val claudeKey = claudeKeyProvider()
+        val raw = (if (claudeKey.isNotBlank()) {
+            (claudeTranslateCall(client, claudeKey, prompt, payload) as? ClaudeReply.Text)?.text
+        } else when (modelProvider()) {
             SubtitleAiModel.GROQ_LLAMA_70B -> matchGroq(prompt, payload, apiKey)
             SubtitleAiModel.GEMINI_FLASH_25 -> matchGemini(prompt, payload, apiKey)
-        } ?: return null
+        }) ?: return null
         val array = extractJsonArray(raw) ?: return null
         val matches = ArrayList<LineMatch>(array.length())
         for (i in 0 until array.length()) {
