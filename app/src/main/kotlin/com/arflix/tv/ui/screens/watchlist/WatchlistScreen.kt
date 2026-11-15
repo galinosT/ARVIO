@@ -135,13 +135,18 @@ fun WatchlistScreen(
     val poster = rememberCardLayoutMode() == CardLayoutMode.POSTER
     val scrollScope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(LibrarySection.WATCHLISTS) }
-    // GMC: the Calendar tab can be switched off in Settings → Interface.
+    // GMC: the Calendar and Homeserver tabs can be switched off in Settings → Interface.
     val gmcContext = androidx.compose.ui.platform.LocalContext.current
     remember { GmcLibraryPrefs.load(gmcContext) }
     val showCalendarTab = GmcLibraryPrefs.showCalendar
-    if (!showCalendarTab && section == LibrarySection.CALENDAR) section = LibrarySection.WATCHLISTS
-    val visibleSections = remember(showCalendarTab) {
-        LibrarySection.entries.filter { showCalendarTab || it != LibrarySection.CALENDAR }
+    val showServersTab = GmcLibraryPrefs.showServers
+    if ((!showCalendarTab && section == LibrarySection.CALENDAR) || (!showServersTab && section == LibrarySection.SERVERS)) {
+        section = LibrarySection.WATCHLISTS
+    }
+    val visibleSections = remember(showCalendarTab, showServersTab) {
+        LibrarySection.entries.filter {
+            (showCalendarTab || it != LibrarySection.CALENDAR) && (showServersTab || it != LibrarySection.SERVERS)
+        }
     }
     val calendarMode = section == LibrarySection.CALENDAR
     val cloudProvider = when (section) {
