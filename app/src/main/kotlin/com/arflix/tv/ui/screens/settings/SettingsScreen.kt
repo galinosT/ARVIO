@@ -661,6 +661,8 @@ fun SettingsScreen(
     var youTubeAddUrl by remember { mutableStateOf("") }
     var renameCatalogId by remember { mutableStateOf("") }
     var renameCatalogTitle by remember { mutableStateOf("") }
+    // GMC: "Library only" for a catalog the Library lists (null: the switch is not offered).
+    var renameLibraryOnly by remember { mutableStateOf<Boolean?>(null) }
 
     // Catalog Pack states
     var showCatalogPackInput by remember { mutableStateOf(false) }
@@ -999,6 +1001,11 @@ fun SettingsScreen(
         } else {
             renameCatalogId = catalog.id
             renameCatalogTitle = catalog.title
+            renameLibraryOnly = if (
+                !catalog.isPreinstalled && catalog.kind == com.arflix.tv.data.model.CatalogKind.STANDARD &&
+                catalog.sourceType != com.arflix.tv.data.model.CatalogSourceType.PREINSTALLED &&
+                catalog.sourceType != com.arflix.tv.data.model.CatalogSourceType.HOME_SERVER
+            ) com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.isLibraryOnly(context, catalog.id) else null
             showCatalogRename = true
         }
     }
@@ -2986,8 +2993,14 @@ fun SettingsScreen(
                 fields = listOf(
                     InputField(label = stringResource(R.string.settings_label_title), value = renameCatalogTitle, onValueChange = { renameCatalogTitle = it })
                 ),
+                toggleFields = renameLibraryOnly?.let { libraryOnly ->
+                    listOf(ToggleField("Μόνο στη Βιβλιοθήκη (όχι στην αρχική)", libraryOnly) { renameLibraryOnly = it })
+                }.orEmpty(),
                 onConfirm = {
                     if (renameCatalogTitle.isNotBlank()) {
+                        renameLibraryOnly?.let {
+                            com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.setLibraryOnly(context, renameCatalogId, it)
+                        }
                         viewModel.renameCatalog(renameCatalogId, renameCatalogTitle)
                         showCatalogRename = false
                     }

@@ -1848,6 +1848,7 @@ class HomeViewModel @Inject constructor(
         listRowsReloadJobs[provider] = viewModelScope.launch(networkDispatcher) {
             val catalogs = runCatching { catalogRepository.getCatalogs() }.getOrDefault(emptyList())
                 .filter { it.sourceType == sourceType }
+                .filterNot { com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.isLibraryOnly(context, it.id) }
             for (catalog in catalogs) {
                 if (!isCurrent()) return@launch
                 val page = runCatching {
@@ -2637,6 +2638,13 @@ class HomeViewModel @Inject constructor(
                 if (e is CancellationException) throw e
             }
         }
+        // GMC: a catalog switched to or from "Library only" leaves or rejoins Home at once.
+        viewModelScope.launch {
+            com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.load(context)
+            com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.libraryOnlyIds
+                .drop(1)
+                .collect { loadHomeData() }
+        }
         viewModelScope.launch {
             catalogRepository.observeCatalogs()
                 .distinctUntilChanged()
@@ -3111,7 +3119,10 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 val iptvFavoritesOnHome = isIptvFavoritesOnHomeEnabled()
+                // GMC: catalogs set to "Library only" are not Home rows.
+                val gmcLibraryOnly = com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs.also { it.load(context) }.libraryOnlyIds.value
                 val savedCatalogs = applyIptvFavoritesPlacement(rawSavedCatalogs, iptvFavoritesOnHome)
+                    .filterNot { it.id in gmcLibraryOnly }
                 currentSavedCatalogs = savedCatalogs
                 savedCatalogById.clear()
                 savedCatalogs.forEach { savedCatalogById[it.id] = it }

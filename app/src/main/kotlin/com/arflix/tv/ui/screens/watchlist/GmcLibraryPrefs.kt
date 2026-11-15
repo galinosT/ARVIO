@@ -13,6 +13,10 @@ internal object GmcLibraryPrefs {
     private const val PREFS = "gmc_local"
     private const val KEY_CALENDAR = "library_calendar"
     private const val KEY_SERVERS = "library_servers"
+    private const val KEY_LIBRARY_ONLY = "library_only_catalogs"
+
+    /** Ids of catalogs kept in the Library only — not shown as Home rows. Bumped on every change. */
+    val libraryOnlyIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
 
     var showCalendar by mutableStateOf(true)
         private set
@@ -26,6 +30,7 @@ internal object GmcLibraryPrefs {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         showCalendar = prefs.getBoolean(KEY_CALENDAR, true)
         showServers = prefs.getBoolean(KEY_SERVERS, true)
+        libraryOnlyIds.value = prefs.getStringSet(KEY_LIBRARY_ONLY, emptySet()).orEmpty().toSet()
     }
 
     fun setShowCalendar(context: Context, show: Boolean) {
@@ -38,5 +43,18 @@ internal object GmcLibraryPrefs {
         loaded = true
         showServers = show
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_SERVERS, show).apply()
+    }
+
+    fun isLibraryOnly(context: Context, catalogId: String): Boolean {
+        load(context)
+        return catalogId in libraryOnlyIds.value
+    }
+
+    fun setLibraryOnly(context: Context, catalogId: String, libraryOnly: Boolean) {
+        load(context)
+        val next = if (libraryOnly) libraryOnlyIds.value + catalogId else libraryOnlyIds.value - catalogId
+        if (next == libraryOnlyIds.value) return
+        libraryOnlyIds.value = next
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putStringSet(KEY_LIBRARY_ONLY, next).apply()
     }
 }
