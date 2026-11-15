@@ -6005,16 +6005,31 @@ class PlayerViewModel @Inject constructor(
                             }
                     } ?: if (winner.retime?.uniform == false) "re-timed line by line — taken as it is" else "too little to measure")
                 )
-                val gmcKeepAi = gmcMeasurement != null && !gmcMeasurement.consistent && gmcAiPossible
+                // GMC: a cue-by-cue retime the model never confirmed is a guess. Two and a Half Men
+                // S02E20 (Nov 2026): the scan started before the player had buffered any English
+                // line, so no AI check could run; the retimer called its map "confident" and it was
+                // served seconds out — over an AI translation that was in sync. Unconfirmed, it
+                // does not replace AI.
+                val gmcRetimeUnconfirmed = winner.retime?.uniform == false &&
+                    aiVerdicts["${gmcChecked.sub.provider}|${gmcChecked.sub.id}"] != AiVerdict.CONFIRMED
+                if (gmcRetimeUnconfirmed) {
+                    Log.i("SubMatch", "[gmc] \"${winner.sub.label}\": re-timed line by line but not confirmed by the AI")
+                }
+                val gmcKeepAi = gmcAiPossible &&
+                    ((gmcMeasurement != null && !gmcMeasurement.consistent) || gmcRetimeUnconfirmed)
                 if (gmcKeepAi) {
                     stopAudioSync()
                     val aiHolding = _uiState.value.isAiTranslating || tryAiFallbackAfterScan()
                     if (aiHolding) {
                         com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, true, originalAi = false, gmcAi = true)
-                        matchStep("4· GMC: \"${winner.sub.label}\" is not in sync all the way through — keeping AI")
+                        matchStep(
+                            if (gmcRetimeUnconfirmed) "4· GMC: re-timed \"${winner.sub.label}\" is unconfirmed — keeping AI"
+                            else "4· GMC: \"${winner.sub.label}\" is not in sync all the way through — keeping AI"
+                        )
                         showMatchToast(
                             PlayerMessage.Raw(
-                                "Ο υπότιτλος «${winner.sub.label}» δεν είναι συγχρονισμένος σε όλο το επεισόδιο — μένει η μετάφραση AI"
+                                if (gmcRetimeUnconfirmed) "Ο υπότιτλος «${winner.sub.label}» δεν επιβεβαιώθηκε — μένει η μετάφραση AI"
+                                else "Ο υπότιτλος «${winner.sub.label}» δεν είναι συγχρονισμένος σε όλο το επεισόδιο — μένει η μετάφραση AI"
                             )
                         )
                         return@launch
