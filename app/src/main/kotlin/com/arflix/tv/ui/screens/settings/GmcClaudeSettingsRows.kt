@@ -73,7 +73,7 @@ private const val TITLE_SWITCH = "Claude Haiku (GMC)"
 private const val DESC_SWITCH =
     "Μετάφραση AI υποτίτλων με Claude Haiku αντί για το παραπάνω μοντέλο. Μόνο σε αυτή τη συσκευή."
 private const val TITLE_KEY = "Κλειδί Claude (GMC)"
-private const val DESC_KEY = "Anthropic API key (sk-ant-…). Δεν συγχρονίζεται με τον λογαριασμό ARVIO."
+private const val DESC_KEY = "Anthropic API key (sk-ant-…). Συγχρονίζεται με τον λογαριασμό σου (και από το dashboard)."
 
 // Bumped on every write so the rows re-read the device-local preferences.
 private var revision by mutableStateOf(0)

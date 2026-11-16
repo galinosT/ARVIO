@@ -16,6 +16,10 @@ COPY app/src/main/kotlin/com/arflix/tv/ui/screens/settings/SettingsScreen.kt /sr
 # Shared with the app: the channel logo map and the library fixtures that some pages import.
 COPY app/src/main/assets/channel-logos.json /src/app/src/main/assets/channel-logos.json
 COPY app/src/androidTest/assets/library /src/app/src/androidTest/assets/library
+# GMC branding: no ARVIO name or logo on screen (personal/debrand.mjs).
+COPY personal/debrand.mjs /src/personal/debrand.mjs
+COPY gmc-cloud/branding /src/gmc-cloud/branding
+RUN node /src/personal/debrand.mjs --res /src/app/src/main/res && node /src/personal/debrand.mjs --web /src/web
 ARG BACKEND_URL
 ARG APP_ANON_KEY
 ENV NEXT_PUBLIC_SELF_HOSTED=false \

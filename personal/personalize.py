@@ -25,6 +25,7 @@ Environment:
 import os
 import pathlib
 import re
+import subprocess
 import shutil
 import sys
 
@@ -112,6 +113,9 @@ def main():
         fail("no settings_app_version_label string starting with ARVIO found")
 
     branded = apply_branding()
+    # No ARVIO name anywhere on screen: strings in every language and text in Kotlin literals.
+    for flag, target in (("--res", ROOT / "app" / "src" / "main" / "res"), ("--kotlin", ROOT / "app" / "src" / "main" / "kotlin")):
+        subprocess.run(["node", str(ROOT / "personal" / "debrand.mjs"), flag, str(target)], check=True)
 
     print(f"personalize: package {package}, name '{app_name}', version {version} ({code}), "
           f"updates from {owner}/{name}, Firebase off, app_name set in {renamed} file(s), "

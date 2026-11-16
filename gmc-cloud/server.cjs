@@ -210,6 +210,39 @@ function allowOwnRedirects(data) {
   return patchedIndex;
 }
 
+// ---- GMC branding of the account pages ----------------------------------------------------
+
+const BRANDING = path.join(__dirname, "branding");
+const ASSET_OVERRIDES = {
+  "assets/arvio-icon-512.png": "gmc-icon-512.png",
+  "assets/arvio-mark.png": "gmc-icon-512.png",
+  "assets/arvio-wordmark.png": "gmc-lockup.png"
+};
+// Same rule as personal/debrand.mjs: the brand word only, never identifiers or domains.
+const BRAND_WORD = /(?<![A-Za-z0-9_./\-$])(ARVIO|Arvio)(?![A-Za-z0-9_])/g;
+// Nothing here applies to GMC Cloud: Premium, Discord badges, ARVIO's policy pages, sign-up and
+// password e-mails (accounts and passwords are managed by the administrator).
+const HIDDEN = [
+  ".premium-banner", "#discordEntry", "#discordJoin", "#discordClaim", "#signup", "#signupNotice", "#forgot",
+  ".linkrow", 'a[href^="https://arvio.tv"]', 'a[href*="discord.gg"]'
+];
+
+const brandedPages = new Map();
+function brandPage(file, data) {
+  if (brandedPages.has(file)) return brandedPages.get(file);
+  let html = data.toString("utf8");
+  html = html
+    .replace(/(["'`])https:\/\/auth\.arvio\.tv\/?\1/g, '$1/$1')
+    .replace(/(["'`])https:\/\/arvio\.tv\/?\1/g, '$1/$1')
+    .replace(BRAND_WORD, "GMC")
+    // Relative asset paths break under /tv/; the GMC orange for the main button.
+    .replace(/(src|href)="assets\//g, '$1="/assets/')
+    .replace("</head>", `<style>${HIDDEN.join(",")}{display:none!important}.btn.primary{background:#FF6A3D!important;color:#0E0F12!important;box-shadow:none!important}</style>\n</head>`);
+  const out = Buffer.from(html);
+  brandedPages.set(file, out);
+  return out;
+}
+
 function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   for (const [re, to] of REWRITES) if (re.test(pathname)) pathname = to;
@@ -221,8 +254,11 @@ function serveStatic(req, res, url) {
   if (!file.startsWith(SITE + path.sep)) return sendJson(res, 404, { error: "Not found" });
   try {
     if (fs.statSync(file).isDirectory()) file = path.join(file, "index.html");
+    const override = ASSET_OVERRIDES[rel.split(path.sep).join("/")];
+    if (override) file = path.join(BRANDING, override);
     let data = fs.readFileSync(file);
-    if (file === path.join(SITE, "index.html")) data = allowOwnRedirects(data);
+    if (file === path.join(SITE, "index.html")) data = brandPage(file, allowOwnRedirects(data));
+    else if (file === path.join(SITE, "delete-account.html")) data = brandPage(file, data);
     return send(res, 200, {
       "content-type": TYPES[path.extname(file)] || "application/octet-stream",
       "cache-control": file.endsWith(".html") ? "no-store" : "public, max-age=3600",
