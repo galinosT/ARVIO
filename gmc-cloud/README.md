@@ -16,9 +16,12 @@ Closed environment: only the functions in `DEFAULT_PUBLIC` (server.cjs) answer; 
 
 ```
 docker compose exec gmc-cloud node gmc-cloud/admin.cjs list
-docker compose exec gmc-cloud node gmc-cloud/admin.cjs create someone@example.com
-docker compose exec gmc-cloud node gmc-cloud/admin.cjs passwd someone@example.com
+read -rsp "Password: " P; echo; docker compose exec -e GMC_ADMIN_PASSWORD="$P" gmc-cloud node gmc-cloud/admin.cjs create someone@example.com; unset P
+read -rsp "Password: " P; echo; docker compose exec -e GMC_ADMIN_PASSWORD="$P" gmc-cloud node gmc-cloud/admin.cjs passwd someone@example.com; unset P
 ```
+
+(The interactive password prompt of admin.cjs did not show through `docker compose exec` on the VPS,
+so the password is read by the shell and passed in.)
 
 Following upstream: after merging ARVIO into `galinos`, `docker compose build && docker compose up -d`.
 New migrations apply on start. A new upstream function stays closed (404) until added to
