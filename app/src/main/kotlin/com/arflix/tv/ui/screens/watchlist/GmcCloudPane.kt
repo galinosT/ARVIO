@@ -173,6 +173,7 @@ internal fun GmcCloudPane(
             current = apiKey,
             onSave = { key ->
                 GmcCloud.setApiKey(context, provider, key)
+                com.arflix.tv.ui.screens.settings.gmcSettingChanged(context)
                 apiKey = GmcCloud.apiKey(context, provider)
                 path.removeRange(1, path.size)
                 showKeyDialog = false

@@ -30,6 +30,12 @@ object GmcNoAnime {
         loaded = true
     }
 
+    /** Re-reads the stored value (after the account sync wrote it). */
+    fun reload(context: Context) {
+        loaded = false
+        load(context)
+    }
+
     fun isEnabled(context: Context): Boolean {
         load(context)
         return enabled

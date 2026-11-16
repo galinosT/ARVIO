@@ -236,6 +236,7 @@ private fun GmcMemoryDialogHost() {
             GmcDialogButton("Αποθήκευση", Pink, Modifier.weight(1f)) {
                 GmcSubtitleMemory.setUrl(context, url)
                 GmcSubtitleMemory.setToken(context, token)
+                gmcSettingChanged(context)
                 extraRevision++
                 dismiss()
                 gmcToast(

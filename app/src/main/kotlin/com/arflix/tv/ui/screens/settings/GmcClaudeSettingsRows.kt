@@ -127,6 +127,8 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
             revision++
         }
     }
+    // These GMC switches ride the account sync too.
+    if (index in 65..68) gmcSettingChanged(context)
 }
 
 private fun maskKey(key: String): String =

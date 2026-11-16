@@ -523,6 +523,8 @@ class CloudSyncRepository @Inject constructor(
     // NEWER timestamp. Scope = genuine globals + per-profile settings; list domains keep their
     // existing merges; `defaultSubtitle` keeps its own `subtitleSettingsUpdatedAt` logic.
 
+    private val GMC_DEVICE_SYNC = com.arflix.tv.data.gmc.GmcDeviceMirror.CLOUD_KEY
+
     private val globalMergeKeys = listOf(
         "accentColor", "oledBlackBackground", "skipProfileSelection", "customUserAgent",
         "dnsProvider", "subtitleAiEnabled", "subtitleAiAutoSelect", "subtitleAiFindBestMatch",
@@ -548,12 +550,15 @@ class CloudSyncRepository @Inject constructor(
         }
         keys.addAll(IptvCloudFields.keys(root))
         keys.addAll(CatalogCloudFields.keys(root))
+        // GMC: one field per device-kept value ("<file>/<key>"), see GmcDeviceMirror.
+        root.optJSONObject(GMC_DEVICE_SYNC)?.let { d -> for (id in d.keys()) keys.add("d:$id") }
         return keys
     }
 
     private fun mergeFieldValue(root: JSONObject, key: String): Any? {
         if (key.startsWith("c:")) return CatalogCloudFields.value(root, key)
         if (key.startsWith("i:")) return IptvCloudFields.value(root, key)
+        if (key.startsWith("d:")) return root.optJSONObject(GMC_DEVICE_SYNC)?.opt(key.substring(2))
         if (key.startsWith("g:")) {
             val k = key.substring(2)
             return if (root.has(k)) root.get(k) else null
@@ -566,6 +571,11 @@ class CloudSyncRepository @Inject constructor(
     }
 
     private fun setMergeFieldValue(root: JSONObject, key: String, value: Any) {
+        if (key.startsWith("d:")) {
+            val d = root.optJSONObject(GMC_DEVICE_SYNC) ?: JSONObject().also { root.put(GMC_DEVICE_SYNC, it) }
+            d.put(key.substring(2), value)
+            return
+        }
         if (key.startsWith("c:")) {
             CatalogCloudFields.put(root, key, value)
             return
@@ -828,6 +838,9 @@ class CloudSyncRepository @Inject constructor(
         // GMC: Claude Haiku (kept in gmc_local on the device, carried by the account's sync).
         root.put("gmcClaudeEnabled", com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs.isEnabled(context))
         root.put("gmcClaudeApiKey", com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs.apiKey(context))
+        // GMC: the rest of the box's own settings (debrid keys, subtitle memory server, glossaries,
+        // Library and Home switches, audio sync). Never the Trakt/Simkl sign-ins or this box's counters.
+        root.put(GMC_DEVICE_SYNC, com.arflix.tv.data.gmc.GmcDeviceMirror.cloudEntries(context))
         // Live TV AI subtitles (global, like the AI subtitle key they share).
         root.put("liveAiSubsEnabled", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.ENABLED] ?: false)
         root.put("liveAiSubsAutoStart", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.AUTO_START] ?: false)
@@ -1956,6 +1969,8 @@ class CloudSyncRepository @Inject constructor(
                 if (root.has("liveAiSubsAutoStart")) prefs[live.AUTO_START] = root.optBoolean("liveAiSubsAutoStart", false)
             }
         }
+        // GMC: the account's device-kept settings onto this box.
+        root.optJSONObject(GMC_DEVICE_SYNC)?.let { com.arflix.tv.data.gmc.GmcDeviceMirror.applyCloudEntries(context, it) }
         // GMC: Claude Haiku. has() guards: snapshots from builds without these fields leave the box's own.
         run {
             val claude = com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs

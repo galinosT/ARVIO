@@ -38,6 +38,12 @@ internal object GmcLibraryPrefs {
         homeOnlyIds.value = prefs.getStringSet(KEY_HOME_ONLY, emptySet()).orEmpty().toSet()
     }
 
+    /** Re-reads the stored values (after the account sync wrote them). */
+    fun reload(context: Context) {
+        loaded = false
+        load(context)
+    }
+
     fun setShowCalendar(context: Context, show: Boolean) {
         loaded = true
         showCalendar = show
