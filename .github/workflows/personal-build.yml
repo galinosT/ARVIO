@@ -9,6 +9,11 @@ name: Personal build
 
 on:
   workflow_dispatch:
+    inputs:
+      cloud_test:
+        description: "GMC Test: a separate app (own package) that syncs with GMC Cloud on the VPS"
+        type: boolean
+        default: false
   push:
     branches: [galinos]
     paths-ignore: ["**.md", "docs/**", "web/**", "netlify-*/**"]
@@ -104,6 +109,10 @@ jobs:
             echo "TRAKT_CLIENT_SECRET=$TRAKT_CLIENT_SECRET"
             grep -vE '^(TMDB_API_KEY|TRAKT_CLIENT_ID|TRAKT_CLIENT_SECRET)=' secrets.defaults.properties
           } > secrets.properties
+          if [ "${{ inputs.cloud_test }}" = "true" ]; then
+            sed -i '/^NETLIFY_BACKEND_URL=/d' secrets.properties
+            echo "NETLIFY_BACKEND_URL=https://gmc.projectneverland.gr/.netlify/functions" >> secrets.properties
+          fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/personal.jks"
           {
             echo "storeFile=$RUNNER_TEMP/personal.jks"
@@ -116,6 +125,8 @@ jobs:
         id: personal
         env:
           PERSONAL_BUILD: ${{ github.run_number }}
+          PERSONAL_PACKAGE: ${{ inputs.cloud_test && 'com.galinos.gmc.cloudtest' || 'com.galinos.gmc' }}
+          PERSONAL_APP_NAME: ${{ inputs.cloud_test && 'GMC Test' || 'GMC' }}
         run: python3 personal/personalize.py
 
       - name: Build signed APK
@@ -130,7 +141,7 @@ jobs:
             echo "::error::Expected one APK, found ${#apks[@]}: ${apks[*]}"
             exit 1
           fi
-          out="gmc-${{ steps.personal.outputs.version }}.apk"
+          out="gmc-${{ inputs.cloud_test && 'test-' || '' }}${{ steps.personal.outputs.version }}.apk"
           cp "${apks[0]}" "$out"
           # Fail if the APK ended up debug-signed: it could never update the installed app.
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
@@ -147,9 +158,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.personal.outputs.version }}
           APK: ${{ steps.apk.outputs.file }}
+          CLOUD_TEST: ${{ inputs.cloud_test && 'true' || 'false' }}
         run: |
-          gh release create "v$VERSION" "$APK" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "GMC $VERSION" \
-            --notes "Personal build of $(git log -1 --format='%h %s')."
+          if [ "$CLOUD_TEST" = "true" ]; then
+            # A pre-release, so Obtainium and the in-app updater of the normal GMC never pick it.
+            gh release create "v$VERSION-test" "$APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "GMC Test $VERSION (GMC Cloud)" \
+              --notes "Test build against GMC Cloud (gmc.projectneverland.gr). Package com.galinos.gmc.cloudtest, installs next to GMC. $(git log -1 --format='%h %s')."
+          else
+            gh release create "v$VERSION" "$APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "GMC $VERSION" \
+              --notes "Personal build of $(git log -1 --format='%h %s')."
+          fi
