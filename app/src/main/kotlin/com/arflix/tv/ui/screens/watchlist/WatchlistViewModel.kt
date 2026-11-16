@@ -859,7 +859,7 @@ class WatchlistViewModel @Inject constructor(
                 )
                 sourceLoadJob = viewModelScope.launch {
                     runCatching {
-                        mediaRepository.loadCustomCatalogPage(activeSource.config, offset = 0, limit = LIBRARY_PAGE_SIZE)
+                        mediaRepository.loadCustomCatalogPage(activeSource.config, offset = 0, limit = LIBRARY_PAGE_SIZE, gmcFilterAnime = false)
                     }.onSuccess { page ->
                         val items = page.items.enrichWithPlaybackProgress()
                         sourcePageStates[cacheKey] = SourcePageState(hasMore = page.hasMore, nextOffset = page.nextOffset ?: page.items.size)
@@ -1031,7 +1031,7 @@ class WatchlistViewModel @Inject constructor(
         sourceLoadMoreJob?.cancel()
         sourceLoadMoreJob = viewModelScope.launch {
             runCatching {
-                if (activeSource is WatchlistSourceItem.Catalog) mediaRepository.loadCustomCatalogPage(activeSource.config, pageState.nextOffset, LIBRARY_PAGE_SIZE)
+                if (activeSource is WatchlistSourceItem.Catalog) mediaRepository.loadCustomCatalogPage(activeSource.config, pageState.nextOffset, LIBRARY_PAGE_SIZE, gmcFilterAnime = false)
                 else mediaRepository.loadHomeServerLibraryPage(
                     sourceRef = (activeSource as WatchlistSourceItem.HomeServer).candidate.sourceRef,
                     offset = pageState.nextOffset,
@@ -1189,7 +1189,7 @@ class WatchlistViewModel @Inject constructor(
             ?: sourceItemsCache[source.id]?.firstOrNull()?.let { it.backdrop ?: it.image }
             ?: try {
                 val first = when(source) {
-                    is WatchlistSourceItem.Catalog -> mediaRepository.loadCustomCatalog(source.config, maxItems = 1)?.items?.firstOrNull()
+                    is WatchlistSourceItem.Catalog -> mediaRepository.loadCustomCatalog(source.config, maxItems = 1, gmcFilterAnime = false)?.items?.firstOrNull()
                     is WatchlistSourceItem.TrackerList -> traktRepository.getPersonalListItems(source.listKey).firstOrNull()
                     else -> null
                 }

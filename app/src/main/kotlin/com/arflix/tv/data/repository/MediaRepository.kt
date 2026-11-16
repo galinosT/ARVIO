@@ -848,7 +848,29 @@ class MediaRepository @Inject constructor(
      * - Anime: Uses "anime" keyword (210024) for accurate anime content
      * - Provider categories: wider recency window to keep full rows populated
      */
-    suspend fun getHomeCategories(): List<Category> = coroutineScope {
+    // GMC: the same "Χωρίς anime" filter for the TMDB Home rows, "more like this" and search.
+    suspend fun getHomeCategories(): List<Category> {
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        return getHomeCategoriesRaw().mapNotNull { c ->
+            val items = com.arflix.tv.data.gmc.GmcNoAnime.filter(c.items)
+            if (items.size == c.items.size) c else items.takeIf { it.isNotEmpty() }?.let { c.copy(items = it) }
+        }
+    }
+
+    suspend fun loadHomeCategoryPage(categoryId: String, page: Int): CategoryPageResult =
+        gmcWithoutAnime(loadHomeCategoryPageRaw(categoryId, page), true)
+
+    suspend fun getSimilar(mediaType: MediaType, mediaId: Int): List<MediaItem> {
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        return com.arflix.tv.data.gmc.GmcNoAnime.filter(getSimilarRaw(mediaType, mediaId))
+    }
+
+    suspend fun search(query: String): List<MediaItem> {
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        return com.arflix.tv.data.gmc.GmcNoAnime.filter(searchRaw(query))
+    }
+
+    private suspend fun getHomeCategoriesRaw(): List<Category> = coroutineScope {
         // Return cached categories if still fresh
         val now = System.currentTimeMillis()
         if (cachedHomeCategories.isNotEmpty() && now - homeCategoriesFetchedAt < HOME_CATEGORIES_CACHE_MS) {
@@ -951,7 +973,7 @@ class MediaRepository @Inject constructor(
         nonEmpty
     }
 
-    suspend fun loadHomeCategoryPage(
+    private suspend fun loadHomeCategoryPageRaw(
         categoryId: String,
         page: Int
     ): CategoryPageResult {
@@ -1002,7 +1024,43 @@ class MediaRepository @Inject constructor(
         )
     }
 
-    suspend fun loadCustomCatalog(catalog: CatalogConfig, maxItems: Int = 40): Category? = coroutineScope {
+    // GMC: "Χωρίς anime". Home, folders and "view all" go through these; the Library passes
+    // gmcFilterAnime = false, since its lists are the user's own.
+    suspend fun loadCustomCatalog(catalog: CatalogConfig, maxItems: Int = 40, gmcFilterAnime: Boolean = true): Category? {
+        val category = loadCustomCatalogRaw(catalog, maxItems) ?: return null
+        if (!gmcFilterAnime) return category
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        val items = com.arflix.tv.data.gmc.GmcNoAnime.filter(category.items)
+        return if (items.isEmpty()) null else if (items.size == category.items.size) category else category.copy(items = items)
+    }
+
+    suspend fun loadCustomCatalogPage(
+        catalog: CatalogConfig,
+        offset: Int,
+        limit: Int,
+        gmcFilterAnime: Boolean = true
+    ): CategoryPageResult = gmcWithoutAnime(loadCustomCatalogPageRaw(catalog, offset, limit), gmcFilterAnime)
+
+    suspend fun loadCollectionCatalogPage(
+        catalog: CatalogConfig,
+        offset: Int,
+        limit: Int,
+        mediaType: MediaType? = null,
+        onItemsAvailable: ((List<MediaItem>) -> Unit)? = null
+    ): CategoryPageResult {
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        val partial = onItemsAvailable?.let { cb -> { items: List<MediaItem> -> cb(com.arflix.tv.data.gmc.GmcNoAnime.filter(items)) } }
+        return gmcWithoutAnime(loadCollectionCatalogPageRaw(catalog, offset, limit, mediaType, partial), true)
+    }
+
+    private fun gmcWithoutAnime(page: CategoryPageResult, apply: Boolean): CategoryPageResult {
+        if (!apply) return page
+        com.arflix.tv.data.gmc.GmcNoAnime.load(context)
+        val items = com.arflix.tv.data.gmc.GmcNoAnime.filter(page.items)
+        return if (items.size == page.items.size) page else page.copy(items = items)
+    }
+
+    private suspend fun loadCustomCatalogRaw(catalog: CatalogConfig, maxItems: Int = 40): Category? = coroutineScope {
         if (maxItems <= 0) return@coroutineScope null
         if (catalog.sourceType == CatalogSourceType.PREINSTALLED && catalog.kind == CatalogKind.STANDARD &&
             PartnerCatalogs.isManaged(catalog.id)) {
@@ -1060,7 +1118,7 @@ class MediaRepository @Inject constructor(
         )
     }
 
-    suspend fun loadCustomCatalogPage(
+    private suspend fun loadCustomCatalogPageRaw(
         catalog: CatalogConfig,
         offset: Int,
         limit: Int
@@ -1352,7 +1410,7 @@ class MediaRepository @Inject constructor(
      * One page of a collection. With [mediaType] set, only refs of that type are paged, and
      * [offset] / the returned `nextOffset` count positions within that filtered list.
      */
-    suspend fun loadCollectionCatalogPage(
+    private suspend fun loadCollectionCatalogPageRaw(
         catalog: CatalogConfig,
         offset: Int,
         limit: Int,
@@ -2880,7 +2938,7 @@ class MediaRepository @Inject constructor(
      * Get recommended content (cached)
      * Falls back to similar if recommendations are empty
      */
-    suspend fun getSimilar(mediaType: MediaType, mediaId: Int): List<MediaItem> {
+    private suspend fun getSimilarRaw(mediaType: MediaType, mediaId: Int): List<MediaItem> {
         val cacheKey = "${mediaType}_similar_$mediaId"
         getFromCache(similarCache, cacheKey)?.let { return it }
 
@@ -3125,7 +3183,7 @@ class MediaRepository @Inject constructor(
     /**
      * Search media
      */
-    suspend fun search(query: String): List<MediaItem> {
+    private suspend fun searchRaw(query: String): List<MediaItem> {
         val results = tmdbApi.searchMulti(apiKey, query, language = contentLanguage)
         val items = results.results
             .filter { it.mediaType == "movie" || it.mediaType == "tv" }

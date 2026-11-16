@@ -1510,7 +1510,7 @@ fun SettingsScreen(
                                                 32 -> showAiApiKeyDialog = true
                                                 33 -> viewModel.startAiKeyServer()
                                                 51, 52 -> onLiveAiSubsRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
-                                                60, 61, 62, 63, 64, 65, 66, 67 -> onGmcClaudeRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
+                                                60, 61, 62, 63, 64, 65, 66, 67, 68 -> onGmcClaudeRowClick(context, tvGeneralRowsForSection(currentSection)[contentFocusIndex])
                                                 34 -> viewModel.cycleTrailerDelay()
                                                 47 -> viewModel.cycleGuideRowCount()
                                                 37 -> viewModel.setTrailerInCards(!uiState.trailerInCards)

@@ -56,7 +56,7 @@ internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63)
 internal const val GMC_ACCOUNTS_EXPORT_INDEX = 22
 
 /** In Settings → Interface, after the Netflix-style Home switch. */
-internal val GMC_HOME_ROWS = listOf(65, 66, 67)
+internal val GMC_HOME_ROWS = listOf(65, 66, 67, 68)
 
 private const val TITLE_SNAPPY = "Γρήγορες κινήσεις στην αρχική (GMC)"
 private const val DESC_SNAPPY =
@@ -64,6 +64,8 @@ private const val DESC_SNAPPY =
 
 private const val TITLE_CALENDAR = "Ημερολόγιο στη Βιβλιοθήκη (GMC)"
 private const val DESC_CALENDAR = "Δείχνει την καρτέλα Calendar στη Βιβλιοθήκη. Μόνο σε αυτή τη συσκευή."
+private const val TITLE_NO_ANIME = "Χωρίς anime (GMC)"
+private const val DESC_NO_ANIME = "Κρύβει τα anime από την αρχική, τους φακέλους, την αναζήτηση και τα «παρόμοια». Δεν πειράζει το Continue Watching και τη Βιβλιοθήκη. Ισχύει από την επόμενη επανεκκίνηση της εφαρμογής."
 private const val TITLE_SERVERS = "Homeserver στη Βιβλιοθήκη (GMC)"
 private const val DESC_SERVERS = "Δείχνει την καρτέλα Homeserver στη Βιβλιοθήκη. Μόνο σε αυτή τη συσκευή."
 
@@ -111,6 +113,10 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
             val prefs = com.arflix.tv.ui.screens.watchlist.GmcLibraryPrefs
             prefs.load(context)
             prefs.setShowCalendar(context, !prefs.showCalendar)
+            revision++
+        }
+        68 -> {
+            com.arflix.tv.data.gmc.GmcNoAnime.setEnabled(context, !com.arflix.tv.data.gmc.GmcNoAnime.isEnabled(context))
             revision++
         }
         67 -> {
@@ -192,6 +198,14 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             },
             isFocused = isFocused,
             onToggle = { onGmcClaudeRowClick(context, 66) },
+            modifier = modifier,
+        )
+        68 -> SettingsToggleRow(
+            title = TITLE_NO_ANIME,
+            subtitle = DESC_NO_ANIME,
+            isEnabled = remember(revision) { com.arflix.tv.data.gmc.GmcNoAnime.isEnabled(context) },
+            isFocused = isFocused,
+            onToggle = { onGmcClaudeRowClick(context, 68) },
             modifier = modifier,
         )
         67 -> SettingsToggleRow(
