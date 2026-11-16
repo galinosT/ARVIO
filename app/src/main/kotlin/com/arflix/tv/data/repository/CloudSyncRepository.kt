@@ -1989,9 +1989,9 @@ class CloudSyncRepository @Inject constructor(
         // ── Trakt tokens ──
         try {
             // GMC: kept for the next upload, never applied here (see GmcTraktIsolation).
-            root.optJSONObject("traktTokens")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
-                GmcTraktIsolation.rememberRemoteTokens(context, json)
-            }
+            // An account without stored tokens (e.g. cleared on GMC Cloud) is remembered as empty, so
+            // an old copy is not uploaded back.
+            GmcTraktIsolation.rememberRemoteTokens(context, root.optJSONObject("traktTokens")?.toString() ?: "{}")
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             AppLogger.recordException(e, mapOf("error_area" to "CloudSync", "cloud_flow" to "apply_trakt_tokens"))

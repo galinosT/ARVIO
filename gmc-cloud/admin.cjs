@@ -7,6 +7,8 @@
  *   docker compose exec -e ARVIO_PASSWORD=... gmc-cloud node gmc-cloud/admin.cjs import-arvio <email> [arvio-email]
  *     copies the ARVIO cloud snapshot of that ARVIO account (default: the same email) into the GMC
  *     Cloud account, replacing what is there. Field times are set to now so the devices take it.
+ *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs clear-trakt <email>
+ *     removes the Trakt sign-in carried over from the ARVIO cloud (GMC keeps Trakt on each box).
  *
  * Public signup is closed on GMC Cloud; this is the only way an account is created.
  * Passwords are read from the terminal (or GMC_ADMIN_PASSWORD) and never printed.
@@ -120,8 +122,34 @@ async function main() {
         return;
       }
       throw new Error("Could not write the snapshot (conflict); try again");
+    } else if (cmd === "clear-trakt" && email) {
+      const account = await store.get(key, { type: "json" });
+      if (!account) throw new Error(`No account ${email}`);
+      const event = fakeEvent({});
+      event.headers.authorization = `Bearer ${(backend.signArvioAccessToken || backend._test.signArvioAccessToken)(account)}`;
+      const identity = await backend.resolveIdentity(event);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const { snapshot, etag } = await backend.loadSnapshotForUpdate(event, identity);
+        let payload = snapshot?.payload;
+        if (typeof payload === "string") payload = JSON.parse(payload);
+        if (!payload) throw new Error(`No saved settings for ${email}`);
+        const had = payload.traktTokens && Object.keys(payload.traktTokens).length;
+        delete payload.traktTokens;
+        payload.traktLinked = false;
+        const metrics = backend.payloadMetrics(payload);
+        const saved = await backend.saveSnapshotToBlobs(event, identity, {
+          payload: metrics.payload, payloadVersion: metrics.payloadVersion, restoreRank: metrics.restoreRank,
+          profileCount: metrics.profileCount, scopedCoverage: metrics.scopedCoverage,
+          payloadUpdatedAt: metrics.payloadUpdatedAt, source: "netlify"
+        }, { etag });
+        if (!saved) continue;
+        await backend.appendSnapshotEvent(event, identity, saved);
+        console.log(had ? `Removed the Trakt sign-in stored for ${email}` : `No Trakt sign-in was stored for ${email}`);
+        return;
+      }
+      throw new Error("Could not write the snapshot (conflict); try again");
     } else {
-      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email]");
+      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email] | clear-trakt <email>");
       process.exitCode = 2;
     }
   } finally {
