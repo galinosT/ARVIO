@@ -20,6 +20,13 @@ read -rsp "Password: " P; echo; docker compose exec -e GMC_ADMIN_PASSWORD="$P" g
 read -rsp "Password: " P; echo; docker compose exec -e GMC_ADMIN_PASSWORD="$P" gmc-cloud node gmc-cloud/admin.cjs passwd someone@example.com; unset P
 ```
 
+Copy an account's settings from the ARVIO cloud (replaces what the GMC Cloud account holds; the
+ARVIO password is read by the shell and only used to sign in to ARVIO once):
+
+```
+read -rsp "ARVIO password: " P; echo; docker compose exec -e ARVIO_PASSWORD="$P" gmc-cloud node gmc-cloud/admin.cjs import-arvio someone@example.com; unset P
+```
+
 (The interactive password prompt of admin.cjs did not show through `docker compose exec` on the VPS,
 so the password is read by the shell and passed in.)
 

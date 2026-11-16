@@ -4,6 +4,9 @@
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs list
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs create <email>     (asks for the password)
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs passwd <email>     (asks for the new password)
+ *   docker compose exec -e ARVIO_PASSWORD=... gmc-cloud node gmc-cloud/admin.cjs import-arvio <email> [arvio-email]
+ *     copies the ARVIO cloud snapshot of that ARVIO account (default: the same email) into the GMC
+ *     Cloud account, replacing what is there. Field times are set to now so the devices take it.
  *
  * Public signup is closed on GMC Cloud; this is the only way an account is created.
  * Passwords are read from the terminal (or GMC_ADMIN_PASSWORD) and never printed.
@@ -37,7 +40,7 @@ function fakeEvent(body) {
 }
 
 async function main() {
-  const [cmd, emailArg] = process.argv.slice(2);
+  const [cmd, emailArg, arvioEmailArg] = process.argv.slice(2);
   if (!process.env.ARVIO_AUTH_SECRET) process.env.ARVIO_AUTH_SECRET = secretFile(".auth-secret");
   const blobs = await startBlobs();
   const backend = require(path.join(SITE, "netlify", "functions", "_backend.js"));
@@ -68,8 +71,57 @@ async function main() {
       const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString("base64url");
       await store.setJSON(key, { ...account, passwordHash: `scrypt:16384:8:1:${salt}:${hash}`, updatedAt: new Date().toISOString() });
       console.log(`Password changed for ${email}`);
+    } else if (cmd === "import-arvio" && email) {
+      const account = await store.get(key, { type: "json" });
+      if (!account) throw new Error(`No GMC Cloud account ${email}: create it first`);
+      const arvioEmail = backend.normalizeEmail(arvioEmailArg || email);
+      const arvioPassword = process.env.ARVIO_PASSWORD || "";
+      if (!arvioPassword) throw new Error("Pass the ARVIO cloud password as ARVIO_PASSWORD");
+      const base = (process.env.ARVIO_SOURCE_URL || "https://auth.arvio.tv/.netlify/functions").replace(/\/+$/, "");
+      const key0 = process.env.APP_ANON_KEY;
+      const call = async (name, body, bearer) => {
+        const res = await fetch(`${base}/${name}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", apikey: key0, authorization: `Bearer ${bearer || key0}` },
+          body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000)
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`ARVIO ${name}: ${json.error || json.message || res.status}`);
+        return json;
+      };
+      const login = await call("auth-login", { email: arvioEmail, password: arvioPassword });
+      const arvioToken = login.access_token || login.accessToken;
+      if (!arvioToken) throw new Error("ARVIO sign-in returned no token");
+      const pulled = await call("account-sync-pull", {}, arvioToken);
+      let payload = pulled.payload;
+      if (!payload) throw new Error(`The ARVIO cloud has no saved settings for ${arvioEmail}`);
+      if (typeof payload === "string") payload = JSON.parse(payload);
+      // Newer than anything the devices hold, so they take the imported values.
+      const now = Date.now();
+      if (payload.fieldUpdatedAt && typeof payload.fieldUpdatedAt === "object") {
+        for (const k of Object.keys(payload.fieldUpdatedAt)) payload.fieldUpdatedAt[k] = now;
+      }
+      if ("updatedAt" in payload) payload.updatedAt = now;
+      const event = fakeEvent({});
+      event.headers.authorization = `Bearer ${(backend.signArvioAccessToken || backend._test.signArvioAccessToken)(account)}`;
+      const identity = await backend.resolveIdentity(event);
+      const metrics = backend.payloadMetrics(payload);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const { etag } = await backend.loadSnapshotForUpdate(event, identity);
+        const saved = await backend.saveSnapshotToBlobs(event, identity, {
+          payload: metrics.payload, payloadVersion: metrics.payloadVersion, restoreRank: metrics.restoreRank,
+          profileCount: metrics.profileCount, scopedCoverage: metrics.scopedCoverage,
+          payloadUpdatedAt: metrics.payloadUpdatedAt, source: "netlify"
+        }, { etag });
+        if (!saved) continue;
+        await backend.appendSnapshotEvent(event, identity, saved);
+        const names = (payload.profiles || []).map((p) => p && p.name).filter(Boolean);
+        console.log(`Imported the ARVIO cloud settings of ${arvioEmail} into ${email}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}, ${Math.round(JSON.stringify(payload).length / 1024)} KB`);
+        return;
+      }
+      throw new Error("Could not write the snapshot (conflict); try again");
     } else {
-      console.log("Usage: admin.cjs list | create <email> | passwd <email>");
+      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email]");
       process.exitCode = 2;
     }
   } finally {
