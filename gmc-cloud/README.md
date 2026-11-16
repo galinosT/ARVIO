@@ -26,3 +26,23 @@ New migrations apply on start. A new upstream function stays closed (404) until 
 
 Back up `data/` (Blobs, `.auth-secret`, `.blobs-token`) and a `pg_dump` of the database.
 Losing `.auth-secret` signs every device out.
+
+## Dashboard and Caddy
+
+`dashboard` is ARVIO's web app (`web/`) built in hosted mode against GMC Cloud
+(`dashboard.Dockerfile`). One domain serves both:
+
+```
+gmc.projectneverland.gr {
+	encode gzip
+	@backend path /.netlify/functions/* /tv /tv/* /assets/* /delete* /account-deletion* /healthz
+	handle @backend {
+		reverse_proxy gmc-cloud:8790
+	}
+	handle {
+		reverse_proxy dashboard:3000
+	}
+}
+```
+
+Before the dashboard is up, `reverse_proxy gmc-cloud:8790` for the whole site is enough.

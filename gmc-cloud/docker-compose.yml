@@ -39,6 +39,28 @@ services:
     mem_limit: 512m
     networks: [internal, caddy]
 
+  # The ARVIO web dashboard, hosted mode, signed in against GMC Cloud. Caddy sends
+  # /.netlify/functions/*, /tv, /assets/*, /delete* and /healthz to gmc-cloud, everything else here.
+  dashboard:
+    build:
+      context: ${ARVIO_SRC:-../../ARVIO}
+      dockerfile: gmc-cloud/dashboard.Dockerfile
+      args:
+        BACKEND_URL: ${PUBLIC_URL:-https://gmc.projectneverland.gr}/.netlify/functions
+        APP_ANON_KEY: ${APP_ANON_KEY}
+    image: gmc-dashboard:local
+    restart: unless-stopped
+    environment:
+      APP_ANON_KEY: ${APP_ANON_KEY}
+      # The proxy routes only use an https backend, so server-side calls go out by the public name.
+      NETLIFY_BACKEND_URL: ${PUBLIC_URL:-https://gmc.projectneverland.gr}/.netlify/functions
+    volumes:
+      - ./dashboard-data:/app/.data
+    ports:
+      - "127.0.0.1:8791:3000"
+    mem_limit: 768m
+    networks: [internal, caddy]
+
 networks:
   internal: {}
   caddy:
