@@ -1,0 +1,46 @@
+# GMC Cloud on the OVH VPS. Lives in ~/docker/gmc-cloud next to a checkout of galinosT/ARVIO.
+# Caddy (stremio-stack) reaches the backend by name on the shared network; the host port is
+# bound to 127.0.0.1 only, for local checks.
+name: gmc-cloud
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gmc
+      POSTGRES_USER: gmc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gmc -d gmc"]
+      interval: 10s
+      retries: 10
+    mem_limit: 512m
+    networks: [internal]
+
+  gmc-cloud:
+    build:
+      context: ${ARVIO_SRC:-../../ARVIO}
+      dockerfile: gmc-cloud/Dockerfile
+    image: gmc-cloud:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://gmc:${POSTGRES_PASSWORD}@db:5432/gmc
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8790:8790"
+    mem_limit: 512m
+    networks: [internal, caddy]
+
+networks:
+  internal: {}
+  caddy:
+    external: true
+    name: stremio-stack_stremio-net
