@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>GMC · Διαχείριση</title>
+<link rel="icon" href="/assets/arvio-icon-512.png">
+<style>
+  :root { --bg:#0E0F12; --panel:#16181d; --line:#272a31; --ink:#F5F3EE; --quiet:#a3a6ad; --accent:#FF6A3D; --bad:#ff6b6b; --good:#4cd38a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:24px; }
+  header img { height:34px; display:block; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  p.note { color:var(--quiet); margin:0 0 16px; font-size:14px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--quiet); margin:10px 0 4px; }
+  input, select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:#0b0c0f; color:var(--ink); font:inherit; }
+  .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+  button { margin-top:14px; padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#0E0F12; font:600 15px system-ui,sans-serif; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); margin-top:0; }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--quiet); font-weight:500; }
+  .msg { margin-top:12px; font-size:14px; min-height:1.5em; }
+  .msg.ok { color:var(--good); } .msg.err { color:var(--bad); }
+  .hidden { display:none; }
+  .who { color:var(--quiet); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="/assets/arvio-wordmark.png" alt="GMC">
+    <span class="who" id="who"></span>
+  </header>
+
+  <section id="loginBox">
+    <h1>Διαχείριση λογαριασμών</h1>
+    <p class="note">Σύνδεση με λογαριασμό διαχειριστή του GMC Cloud.</p>
+    <form id="loginForm">
+      <label for="le">Email</label><input id="le" type="email" autocomplete="username" required>
+      <label for="lp">Κωδικός</label><input id="lp" type="password" autocomplete="current-password" required>
+      <button type="submit">Σύνδεση</button>
+      <div class="msg" id="loginMsg"></div>
+    </form>
+  </section>
+
+  <div id="app" class="hidden">
+    <section>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <h2 style="margin:0">Λογαριασμοί</h2>
+        <button class="ghost" id="refresh" type="button">Ανανέωση</button>
+      </div>
+      <table><thead><tr><th>Email</th><th>Δημιουργήθηκε</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+      <div class="msg" id="listMsg"></div>
+    </section>
+
+    <section>
+      <h2>Νέος λογαριασμός</h2>
+      <form id="createForm">
+        <label for="ce">Email</label><input id="ce" type="email" required>
+        <div class="row">
+          <div><label for="cp">Κωδικός</label><input id="cp" type="password" autocomplete="new-password" minlength="6" required></div>
+          <div><label for="cp2">Ξανά ο κωδικός</label><input id="cp2" type="password" autocomplete="new-password" minlength="6" required></div>
+        </div>
+        <button type="submit">Δημιουργία</button>
+        <div class="msg" id="createMsg"></div>
+      </form>
+    </section>
+
+    <section>
+      <h2>Αλλαγή κωδικού</h2>
+      <form id="passForm">
+        <label for="pe">Λογαριασμός</label><select id="pe" class="accountSelect" required></select>
+        <div class="row">
+          <div><label for="pp">Νέος κωδικός</label><input id="pp" type="password" autocomplete="new-password" minlength="6" required></div>
+          <div><label for="pp2">Ξανά ο κωδικός</label><input id="pp2" type="password" autocomplete="new-password" minlength="6" required></div>
+        </div>
+        <button type="submit">Αλλαγή</button>
+        <div class="msg" id="passMsg"></div>
+      </form>
+    </section>
+
+    <section>
+      <h2>Μεταφορά από το cloud του ARVIO</h2>
+      <p class="note">Φέρνει προφίλ, addons, καταλόγους και ρυθμίσεις από έναν λογαριασμό ARVIO και αντικαθιστά ό,τι έχει ο λογαριασμός GMC. Ο κωδικός ARVIO χρησιμοποιείται μία φορά και δεν αποθηκεύεται.</p>
+      <form id="importForm">
+        <label for="ie">Λογαριασμός GMC</label><select id="ie" class="accountSelect" required></select>
+        <div class="row">
+          <div><label for="ia">Email στο ARVIO (αν διαφέρει)</label><input id="ia" type="email"></div>
+          <div><label for="ip">Κωδικός ARVIO</label><input id="ip" type="password" autocomplete="off" required></div>
+        </div>
+        <button type="submit">Μεταφορά</button>
+        <div class="msg" id="importMsg"></div>
+      </form>
+    </section>
+  </div>
+</main>
+<script>
+(() => {
+  const KEY = "__APP_ANON_KEY__";
+  const $ = (id) => document.getElementById(id);
+  let token = "";
+  try { token = sessionStorage.getItem("gmcAdminToken") || ""; } catch {}
+
+  function show(el, text, ok) { el.textContent = text || ""; el.className = "msg " + (ok ? "ok" : "err"); }
+
+  async function api(op, body) {
+    const res = await fetch("/admin/api/" + op, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify(body || {})
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.status === 401) { signOut(); throw new Error("Η σύνδεση έληξε, συνδέσου ξανά"); }
+    if (!res.ok) throw new Error(json.error || ("HTTP " + res.status));
+    return json;
+  }
+
+  function signOut() {
+    token = "";
+    try { sessionStorage.removeItem("gmcAdminToken"); } catch {}
+    $("app").classList.add("hidden"); $("loginBox").classList.remove("hidden"); $("who").textContent = "";
+  }
+
+  async function load() {
+    try {
+      const { accounts, admin } = await api("list");
+      $("who").textContent = admin;
+      $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
+      const rows = $("rows"); rows.textContent = "";
+      for (const a of accounts) {
+        const tr = document.createElement("tr");
+        const created = a.createdAt ? new Date(a.createdAt).toLocaleDateString("el-GR") : "";
+        tr.innerHTML = "<td></td><td></td><td></td>";
+        tr.children[0].textContent = a.email;
+        tr.children[1].textContent = created;
+        const b = document.createElement("button"); b.className = "ghost"; b.type = "button"; b.textContent = "Καθάρισμα Trakt";
+        b.title = "Σβήνει την παλιά σύνδεση Trakt του ARVIO από τον λογαριασμό (το Trakt κάθε κουτιού δεν επηρεάζεται)";
+        b.onclick = async () => { b.disabled = true; try { show($("listMsg"), (await api("clear-trakt", { email: a.email })).message, true); } catch (e) { show($("listMsg"), e.message, false); } b.disabled = false; };
+        tr.children[2].appendChild(b);
+        rows.appendChild(tr);
+      }
+      for (const sel of document.querySelectorAll(".accountSelect")) {
+        const keep = sel.value; sel.textContent = "";
+        for (const a of accounts) { const o = document.createElement("option"); o.value = a.email; o.textContent = a.email; sel.appendChild(o); }
+        if (keep) sel.value = keep;
+      }
+    } catch (e) {
+      if (token) show($("loginMsg"), e.message, false);
+    }
+  }
+
+  $("loginForm").onsubmit = async (ev) => {
+    ev.preventDefault();
+    show($("loginMsg"), "Σύνδεση…", true);
+    try {
+      const res = await fetch("/.netlify/functions/auth-login", {
+        method: "POST",
+        headers: { "content-type": "application/json", apikey: KEY, authorization: "Bearer " + KEY },
+        body: JSON.stringify({ email: $("le").value.trim(), password: $("lp").value })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.access_token) throw new Error(json.error || "Λάθος email ή κωδικός");
+      token = json.access_token;
+      try { sessionStorage.setItem("gmcAdminToken", token); } catch {}
+      $("lp").value = "";
+      show($("loginMsg"), "", true);
+      await load();
+      if ($("app").classList.contains("hidden")) show($("loginMsg"), "Αυτός ο λογαριασμός δεν είναι διαχειριστής", false);
+    } catch (e) { show($("loginMsg"), e.message, false); }
+  };
+
+  function twice(a, b, msg) { if ($(a).value !== $(b).value) { show($(msg), "Οι δύο κωδικοί δεν ταιριάζουν", false); return false; } return true; }
+
+  $("createForm").onsubmit = async (ev) => {
+    ev.preventDefault(); if (!twice("cp", "cp2", "createMsg")) return;
+    try { show($("createMsg"), (await api("create", { email: $("ce").value.trim(), password: $("cp").value })).message, true); $("cp").value = $("cp2").value = ""; $("ce").value = ""; await load(); }
+    catch (e) { show($("createMsg"), e.message, false); }
+  };
+  $("passForm").onsubmit = async (ev) => {
+    ev.preventDefault(); if (!twice("pp", "pp2", "passMsg")) return;
+    try { show($("passMsg"), (await api("passwd", { email: $("pe").value, password: $("pp").value })).message, true); $("pp").value = $("pp2").value = ""; }
+    catch (e) { show($("passMsg"), e.message, false); }
+  };
+  $("importForm").onsubmit = async (ev) => {
+    ev.preventDefault(); show($("importMsg"), "Μεταφορά…", true);
+    try { show($("importMsg"), (await api("import-arvio", { email: $("ie").value, arvioEmail: $("ia").value.trim(), arvioPassword: $("ip").value })).message, true); }
+    catch (e) { show($("importMsg"), e.message, false); }
+    $("ip").value = "";
+  };
+  $("refresh").onclick = load;
+  if (token) load();
+})();
+</script>
+</body>
+</html>

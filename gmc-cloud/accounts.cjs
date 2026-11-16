@@ -1,0 +1,164 @@
+"use strict";
+/**
+ * GMC Cloud account operations, shared by the terminal script (admin.cjs) and the admin page
+ * (server.cjs, /admin). Needs the Blobs context set (startBlobs) before the first call.
+ * Every function returns a short English message for the operator, or throws with one.
+ */
+const path = require("node:path");
+const crypto = require("node:crypto");
+const { SITE } = require("./paths.cjs");
+
+let cached = null;
+function deps() {
+  if (cached) return cached;
+  const backend = require(path.join(SITE, "netlify", "functions", "_backend.js"));
+  const { getStore } = require(require.resolve("@netlify/blobs", { paths: [SITE] }));
+  cached = { backend, store: getStore("arvio-auth") };
+  return cached;
+}
+
+function fakeEvent(body) {
+  return {
+    httpMethod: "POST",
+    headers: { "content-type": "application/json", apikey: process.env.APP_ANON_KEY, "x-nf-site-id": "gmc-cloud", "x-nf-deploy-id": "gmc-cloud", "x-nf-client-connection-ip": "127.0.0.1" },
+    body: JSON.stringify(body),
+    queryStringParameters: {},
+    blobs: Buffer.from(JSON.stringify({ url: "", token: "" })).toString("base64")
+  };
+}
+
+function normalize(email) {
+  return deps().backend.normalizeEmail(email || "");
+}
+
+function accountKey(email) {
+  return `accounts/email/${crypto.createHash("sha256").update(normalize(email)).digest("hex")}.json`;
+}
+
+async function loadAccount(email) {
+  const account = await deps().store.get(accountKey(email), { type: "json" });
+  if (!account) throw new Error(`No account ${normalize(email)}`);
+  return account;
+}
+
+function checkPassword(password) {
+  if (typeof password !== "string" || password.length < 6) throw new Error("The password needs at least 6 characters");
+}
+
+async function list() {
+  const { backend, store } = deps();
+  const keys = await backend.listBlobKeys(store, "accounts/email/");
+  const out = [];
+  for (const k of keys) {
+    const a = await store.get(k, { type: "json" });
+    if (a) out.push({ email: a.email, createdAt: a.createdAt || null, accountId: a.accountId });
+  }
+  return out.sort((a, b) => String(a.email).localeCompare(String(b.email)));
+}
+
+async function create(email, password) {
+  checkPassword(password);
+  const res = await deps().backend.handleCloudAuthEmail(fakeEvent({ email: normalize(email), password }));
+  if (res.statusCode !== 200) throw new Error(JSON.parse(res.body).error || `HTTP ${res.statusCode}`);
+  return `Created ${normalize(email)}`;
+}
+
+async function passwd(email, password) {
+  checkPassword(password);
+  const account = await loadAccount(email);
+  const salt = crypto.randomBytes(16).toString("base64url");
+  const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString("base64url");
+  await deps().store.setJSON(accountKey(email), { ...account, passwordHash: `scrypt:16384:8:1:${salt}:${hash}`, updatedAt: new Date().toISOString() });
+  return `Password changed for ${normalize(email)}`;
+}
+
+/** Writes [payload] as the account's snapshot (replacing it). */
+async function writeSnapshot(account, mutate) {
+  const { backend } = deps();
+  const event = fakeEvent({});
+  event.headers.authorization = `Bearer ${(backend.signArvioAccessToken || backend._test.signArvioAccessToken)(account)}`;
+  const identity = await backend.resolveIdentity(event);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { snapshot, etag } = await backend.loadSnapshotForUpdate(event, identity);
+    let current = snapshot?.payload;
+    if (typeof current === "string") current = JSON.parse(current);
+    const { payload, result } = mutate(current);
+    const metrics = backend.payloadMetrics(payload);
+    const saved = await backend.saveSnapshotToBlobs(event, identity, {
+      payload: metrics.payload, payloadVersion: metrics.payloadVersion, restoreRank: metrics.restoreRank,
+      profileCount: metrics.profileCount, scopedCoverage: metrics.scopedCoverage,
+      payloadUpdatedAt: metrics.payloadUpdatedAt, source: "netlify"
+    }, { etag });
+    if (!saved) continue;
+    await backend.appendSnapshotEvent(event, identity, saved);
+    return { metrics, result };
+  }
+  throw new Error("Could not write the settings (conflict); try again");
+}
+
+async function importArvio(email, arvioEmail, arvioPassword) {
+  const account = await loadAccount(email);
+  const source = normalize(arvioEmail || email);
+  if (!arvioPassword) throw new Error("The ARVIO cloud password is required");
+  const base = (process.env.ARVIO_SOURCE_URL || "https://auth.arvio.tv/.netlify/functions").replace(/\/+$/, "");
+  const key0 = process.env.APP_ANON_KEY;
+  const call = async (name, body, bearer) => {
+    const res = await fetch(`${base}/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: key0, authorization: `Bearer ${bearer || key0}` },
+      body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`ARVIO ${name}: ${json.error || json.message || res.status}`);
+    return json;
+  };
+  const login = await call("auth-login", { email: source, password: arvioPassword });
+  const token = login.access_token || login.accessToken;
+  if (!token) throw new Error("ARVIO sign-in returned no token");
+  const pulled = await call("account-sync-pull", {}, token);
+  let payload = pulled.payload;
+  if (!payload) throw new Error(`The ARVIO cloud has no saved settings for ${source}`);
+  if (typeof payload === "string") payload = JSON.parse(payload);
+  // Newer than anything the devices hold, so they take the imported values. The official
+  // app's Trakt sign-in stays behind: GMC keeps Trakt on each box.
+  const now = Date.now();
+  if (payload.fieldUpdatedAt && typeof payload.fieldUpdatedAt === "object") {
+    for (const k of Object.keys(payload.fieldUpdatedAt)) payload.fieldUpdatedAt[k] = now;
+  }
+  if ("updatedAt" in payload) payload.updatedAt = now;
+  delete payload.traktTokens;
+  payload.traktLinked = false;
+  const { metrics } = await writeSnapshot(account, () => ({ payload }));
+  const names = (payload.profiles || []).map((p) => p && p.name).filter(Boolean);
+  return `Imported the ARVIO cloud settings of ${source} into ${normalize(email)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}`;
+}
+
+async function clearTrakt(email) {
+  const account = await loadAccount(email);
+  const { result } = await writeSnapshot(account, (current) => {
+    if (!current) throw new Error(`No saved settings for ${normalize(email)}`);
+    const had = Boolean(current.traktTokens && Object.keys(current.traktTokens).length);
+    delete current.traktTokens;
+    current.traktLinked = false;
+    return { payload: current, result: had };
+  });
+  return result ? `Removed the Trakt sign-in stored for ${normalize(email)}` : `No Trakt sign-in was stored for ${normalize(email)}`;
+}
+
+/** The signed-in user of a GMC access token, when it is an administrator (GMC_ADMIN_EMAILS). */
+async function adminFromToken(token) {
+  const admins = (process.env.GMC_ADMIN_EMAILS || "").split(",").map((s) => normalize(s.trim())).filter(Boolean);
+  if (!admins.length || !token) return null;
+  const { backend } = deps();
+  const event = fakeEvent({});
+  event.headers.authorization = `Bearer ${token}`;
+  try {
+    const identity = await backend.resolveIdentity(event);
+    const email = normalize(identity.email);
+    return admins.includes(email) ? email : null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { list, create, passwd, importArvio, clearTrakt, adminFromToken, normalize };

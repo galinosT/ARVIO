@@ -37,6 +37,24 @@ New migrations apply on start. A new upstream function stays closed (404) until 
 Back up `data/` (Blobs, `.auth-secret`, `.blobs-token`) and a `pg_dump` of the database.
 Losing `.auth-secret` signs every device out.
 
+## Admin page
+
+`/admin` manages the accounts from a browser (list, create, change password, import from the ARVIO
+cloud, clear the ARVIO Trakt sign-in). Two locks: Caddy `basic_auth` on `/admin*`, then a sign-in
+with a GMC Cloud account listed in `GMC_ADMIN_EMAILS`. Ten bad attempts from one address block it
+for 15 minutes. Every action is logged as `[admin] <who> <what> <account>`.
+
+```
+	@admin path /admin /admin/*
+	handle @admin {
+		basic_auth {
+			<user> <bcrypt hash from: docker exec -it caddy caddy hash-password>
+		}
+		reverse_proxy gmc-cloud:8790
+	}
+```
+(first inside the site block, before the other handles)
+
 ## Dashboard and Caddy
 
 `dashboard` is ARVIO's web app (`web/`) built in hosted mode against GMC Cloud

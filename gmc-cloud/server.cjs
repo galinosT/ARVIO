@@ -324,9 +324,77 @@ function wantsSignup(body) {
   }
 }
 
+// ---- admin page (/admin) ------------------------------------------------------------------
+// Two locks: Caddy's basic_auth in front of /admin*, and a GMC sign-in by an account listed in
+// GMC_ADMIN_EMAILS. Repeated bad tokens from one address are refused for a while.
+
+const ADMIN_OPS = {
+  list: async (_body, admin) => ({ accounts: await accountsApi().list(), admin }),
+  create: async (b) => ({ message: await accountsApi().create(b.email, b.password) }),
+  passwd: async (b) => ({ message: await accountsApi().passwd(b.email, b.password) }),
+  "import-arvio": async (b) => ({ message: await accountsApi().importArvio(b.email, b.arvioEmail, b.arvioPassword) }),
+  "clear-trakt": async (b) => ({ message: await accountsApi().clearTrakt(b.email) })
+};
+let accountsModule = null;
+function accountsApi() {
+  return (accountsModule ||= require("./accounts.cjs"));
+}
+
+const adminFailures = new Map();
+function adminBlocked(ip) {
+  const entry = adminFailures.get(ip);
+  return Boolean(entry && entry.count >= 10 && Date.now() - entry.since < 15 * 60 * 1000);
+}
+function adminFailed(ip) {
+  const now = Date.now();
+  const entry = adminFailures.get(ip);
+  if (!entry || now - entry.since > 15 * 60 * 1000) adminFailures.set(ip, { count: 1, since: now });
+  else entry.count++;
+}
+
+let adminPage = null;
+function serveAdminPage(res) {
+  if (!adminPage) {
+    adminPage = fs.readFileSync(path.join(__dirname, "admin.html"), "utf8")
+      .replace("__APP_ANON_KEY__", String(process.env.APP_ANON_KEY || "").replace(/[^A-Za-z0-9._-]/g, ""));
+  }
+  return send(res, 200, {
+    "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer", "x-frame-options": "DENY", "x-robots-tag": "noindex, nofollow"
+  }, adminPage);
+}
+
+async function handleAdmin(req, res, url) {
+  if (url.pathname === "/admin" || url.pathname === "/admin/") {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed" });
+    return serveAdminPage(res);
+  }
+  const op = url.pathname.match(/^\/admin\/api\/([a-z-]+)$/)?.[1];
+  if (!op || !ADMIN_OPS[op]) return sendJson(res, 404, { error: "Not found" });
+  if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
+  const ip = clientIp(req, lowerHeaders(req.headers));
+  if (adminBlocked(ip)) return sendJson(res, 429, { error: "Too many attempts; try again later" });
+  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  const admin = await accountsApi().adminFromToken(token);
+  if (!admin) {
+    adminFailed(ip);
+    return sendJson(res, 401, { error: "Not signed in as an administrator" });
+  }
+  let body = {};
+  try { body = JSON.parse((await readBody(req)).toString("utf8") || "{}"); } catch { return sendJson(res, 400, { error: "Bad request" }); }
+  try {
+    const result = await ADMIN_OPS[op](body, admin);
+    console.log(`[admin] ${admin} ${op}${body.email ? ` ${accountsApi().normalize(body.email)}` : ""}`);
+    return sendJson(res, 200, result);
+  } catch (error) {
+    return sendJson(res, 400, { error: error?.message || "Failed" });
+  }
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/healthz") return sendJson(res, 200, { ok: true });
+  if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) return handleAdmin(req, res, url);
   const match = url.pathname.match(/^\/(?:\.netlify\/functions|api)\/([a-z0-9-]+)\/?$/);
   if (match) {
     const name = match[1];
