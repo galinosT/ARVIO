@@ -9,8 +9,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
-# The interface strings are generated from the Android resources.
+# The interface strings are generated from the Android resources; the language list comes
+# from the Settings screen.
 COPY app/src/main/res /src/app/src/main/res
+COPY app/src/main/kotlin/com/arflix/tv/ui/screens/settings/SettingsScreen.kt /src/app/src/main/kotlin/com/arflix/tv/ui/screens/settings/SettingsScreen.kt
+# Shared with the app: the channel logo map and the library fixtures that some pages import.
+COPY app/src/main/assets/channel-logos.json /src/app/src/main/assets/channel-logos.json
+COPY app/src/androidTest/assets/library /src/app/src/androidTest/assets/library
 ARG BACKEND_URL
 ARG APP_ANON_KEY
 ENV NEXT_PUBLIC_SELF_HOSTED=false \
