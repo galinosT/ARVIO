@@ -72,8 +72,20 @@ internal interface GmcSettingsEntryPoint {
     fun cloudSyncRepository(): CloudSyncRepository
 }
 
-private fun cloudSync(context: Context): CloudSyncRepository =
+internal fun cloudSync(context: Context): CloudSyncRepository =
     EntryPointAccessors.fromApplication(context.applicationContext, GmcSettingsEntryPoint::class.java).cloudSyncRepository()
+
+/** A GMC device setting that rides the account sync changed: push it like any other setting. */
+internal fun gmcSettingChanged(context: Context) {
+    val repo = cloudSync(context)
+    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        runCatching {
+            repo.markLocalStateDirty()
+            kotlinx.coroutines.delay(350)
+            repo.pushToCloud(force = false)
+        }
+    }
+}
 
 internal fun onGmcExtraRowClick(index: Int) {
     when (index) {

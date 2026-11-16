@@ -26,7 +26,7 @@ const settings: AppSettings = {
   secondarySubtitle: "", audioLanguage: "", subtitleSize: 100, subtitleColor: "#fff", subtitleColorName: "White",
   subtitleOffsetMs: 0, subtitleOffset: "bottom", subtitleStyle: "outline", subtitleStylized: false,
   filterSubtitlesByLanguage: false, removeHearingImpaired: false, aiSubtitlesEnabled: false, aiSubtitleModel: "off",
-  aiAutoSelect: false, aiApiKey: "", aiFindBestMatch: false, dolbyVisionCompat: true, telegramSearchOnClickOnly: true,
+  aiAutoSelect: false, aiApiKey: "", aiFindBestMatch: false, gmcClaudeEnabled: false, gmcClaudeApiKey: "", dolbyVisionCompat: true, telegramSearchOnClickOnly: true,
   streamSearchMode: "parallel", subtitleFont: "System", useForcedSubtitles: false, subtitlePreload: true, showEpisodeRatings: false, animeEpisodeStructuring: "broadcast",
   defaultPlayer: "browser", cardLayoutMode: "landscape", deviceModeOverride: "auto",
   oledBlack: true, clockFormat: "24h", showBudget: false, iptvFavoritesOnHome: false, smoothScrolling: false, spoilerBlur: false, accentColor: "arctic",

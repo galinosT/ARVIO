@@ -46,7 +46,7 @@ import com.arflix.tv.ui.theme.TextSecondary
 
 /*
  * GMC personal build: "Claude Haiku" switch and key, in the AI subtitles section. Both live only
- * on this device (GmcClaudePrefs), never in the ARVIO cloud sync.
+ * on this device (GmcClaudePrefs) and carried by the account sync (gmcClaude* fields).
  */
 
 /** TV settings row indices, after the existing ones (0–54). */
@@ -98,6 +98,7 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
                 return
             }
             GmcClaudePrefs.setEnabled(context, enable)
+            gmcSettingChanged(context)
             revision++
         }
         61 -> showKeyDialog = true
@@ -145,6 +146,7 @@ private fun GmcClaudeKeyDialogHost() {
             }
             GmcClaudePrefs.setApiKey(context, trimmed)
             if (trimmed.isEmpty()) GmcClaudePrefs.setEnabled(context, false)
+            gmcSettingChanged(context)
             revision++
             showKeyDialog = false
             gmcToast(context, if (trimmed.isEmpty()) "Το κλειδί Claude διαγράφηκε" else "Το κλειδί Claude αποθηκεύτηκε")

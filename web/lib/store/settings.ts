@@ -51,6 +51,8 @@ export const defaultSettings: AppSettings = {
   aiAutoSelect: false,
   aiApiKey: "",
   aiFindBestMatch: false,
+  gmcClaudeEnabled: false,
+  gmcClaudeApiKey: "",
   dolbyVisionCompat: true,
   telegramSearchOnClickOnly: true,
   defaultPlayer: "browser",

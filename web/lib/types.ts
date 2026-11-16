@@ -558,6 +558,9 @@ export interface AppSettings {
   aiApiKey: string;
   /** Android/TV: let AI pick the best-synced subtitle from your addons. */
   aiFindBestMatch: boolean;
+  /** GMC: translate with Claude Haiku (its own key; Gemini/Groq stay set for audio features). */
+  gmcClaudeEnabled: boolean;
+  gmcClaudeApiKey: string;
   /** Android/TV: play Dolby Vision releases as HDR10 where the device can't decode them. */
   dolbyVisionCompat: boolean;
   /** Android/TV: only search Telegram when its source row is selected. */

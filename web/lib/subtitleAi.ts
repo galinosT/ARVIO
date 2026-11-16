@@ -15,6 +15,10 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // same v1beta generateContent API, thinking switched to "minimal" for speed.
 export const GEMINI_MODEL_ID = "gemini-3.5-flash-lite";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_ID}:generateContent`;
+// GMC: Claude Haiku, the same model and request shape as the app (GmcClaude.kt).
+export const CLAUDE_MODEL_ID = "claude-haiku-5-5";
+const CLAUDE_URL = "https://api.anthropic.com/v1/messages";
+const CLAUDE_MAX_TOKENS = 8000;
 const GEMINI_MAX_TRANSIENT_RETRIES = 2;
 const GEMINI_RETRY_BASE_DELAY_MS = 400;
 const GEMINI_RETRYABLE_HTTP = new Set([500, 502, 503]);
@@ -28,8 +32,8 @@ export class SubtitleTranslationError extends Error {
   }
 }
 
-export function translationErrorFor(provider: "groq" | "gemini", status: number): SubtitleTranslationError {
-  const name = provider === "gemini" ? "Gemini" : "Groq";
+export function translationErrorFor(provider: "groq" | "gemini" | "claude", status: number): SubtitleTranslationError {
+  const name = provider === "gemini" ? "Gemini" : provider === "claude" ? "Claude" : "Groq";
   if (status === 429) return new SubtitleTranslationError(`${name} rate limit reached — AI subtitles will retry shortly.`, "rate_limited");
   if (status === 401 || status === 403) return new SubtitleTranslationError(`${name} rejected the API key. Check AI subtitles in Settings.`, "auth");
   if (status === 400) return new SubtitleTranslationError(`${name} could not process this subtitle batch (HTTP 400).`, "network");
@@ -105,7 +109,7 @@ export class SubtitleTranslator {
 
   constructor(
     private apiKey: string,
-    private model: "groq" | "gemini",
+    private model: "groq" | "gemini" | "claude",
     private targetLanguage: string
   ) {}
 
@@ -148,7 +152,9 @@ export class SubtitleTranslator {
       const encoded = batch.map((line) => line.replace(/\n/g, NL));
       const translated = this.model === "gemini"
         ? await this.callGemini(encoded)
-        : await this.callGroq(encoded);
+        : this.model === "claude"
+          ? await this.callClaude(encoded)
+          : await this.callGroq(encoded);
       if (!translated) throw new SubtitleTranslationError("AI subtitles returned an unreadable translation — showing the original line.", "response");
       batch.forEach((key, index) => {
         const value = (translated[index] ?? key).replace(new RegExp(NL, "g"), "\n");
@@ -193,6 +199,41 @@ export class SubtitleTranslator {
     const payload = await response.json();
     const content = payload?.choices?.[0]?.message?.content ?? "";
     const parsed = extractJsonArray(content);
+    return parsed && parsed.length === lines.length ? parsed : null;
+  }
+
+  private async callClaude(lines: string[], transientAttempt = 0): Promise<string[] | null> {
+    const response = await fetch(CLAUDE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.apiKey,
+        "anthropic-version": "2023-06-01",
+        // The key is the viewer's own, used from their own browser.
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL_ID,
+        max_tokens: CLAUDE_MAX_TOKENS,
+        system: systemPrompt(this.targetLanguage),
+        messages: [{ role: "user", content: JSON.stringify(lines) }],
+        thinking: { type: "disabled" },
+        output_config: { effort: "low" }
+      })
+    });
+    if ([500, 502, 503, 529].includes(response.status) && transientAttempt < GEMINI_MAX_TRANSIENT_RETRIES) {
+      const delay = GEMINI_RETRY_BASE_DELAY_MS * 2 ** transientAttempt * (0.7 + Math.random() * 0.6);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return this.callClaude(lines, transientAttempt + 1);
+    }
+    if (response.status === 429) this.backoffUntil = Date.now() + 5000;
+    if (!response.ok) throw translationErrorFor("claude", response.status);
+    const payload = await response.json();
+    if (payload?.stop_reason === "refusal") throw new SubtitleTranslationError("Claude declined to translate this line.", "blocked");
+    const text = Array.isArray(payload?.content)
+      ? payload.content.filter((block: { type?: string }) => block?.type === "text").map((block: { text?: string }) => block.text ?? "").join("")
+      : "";
+    const parsed = extractJsonArray(text);
     return parsed && parsed.length === lines.length ? parsed : null;
   }
 

@@ -528,7 +528,9 @@ class CloudSyncRepository @Inject constructor(
         "dnsProvider", "subtitleAiEnabled", "subtitleAiAutoSelect", "subtitleAiFindBestMatch",
         "subtitlePreloadEnabled", "dolbyVisionCompatEnabled", "subtitleAiApiKey",
         "subtitleAiModel", "subtitleRemoveHearingImpaired", "telegramSearchOnClickOnly",
-        "subtitleHearingSyncV2", "liveAiSubsEnabled", "liveAiSubsAutoStart"
+        "subtitleHearingSyncV2", "liveAiSubsEnabled", "liveAiSubsAutoStart",
+        // GMC: Claude Haiku switch and key, set on a box or from the GMC dashboard.
+        "gmcClaudeEnabled", "gmcClaudeApiKey"
     )
     // Per-profile fields excluded from the generic merge (handled by their own logic / not values).
     private val profileMergeExclude = setOf("defaultSubtitle", "subtitleSettingsUpdatedAt")
@@ -823,6 +825,9 @@ class CloudSyncRepository @Inject constructor(
         root.put("subtitleAiApiKey", prefs[subtitleAiApiKeyKey] ?: "")
         root.put("subtitleAiModel", prefs[subtitleAiModelKey] ?: "GROQ_LLAMA_70B")
         root.put("subtitleRemoveHearingImpaired", prefs[subtitleRemoveHearingImpairedKey] ?: true)
+        // GMC: Claude Haiku (kept in gmc_local on the device, carried by the account's sync).
+        root.put("gmcClaudeEnabled", com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs.isEnabled(context))
+        root.put("gmcClaudeApiKey", com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs.apiKey(context))
         // Live TV AI subtitles (global, like the AI subtitle key they share).
         root.put("liveAiSubsEnabled", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.ENABLED] ?: false)
         root.put("liveAiSubsAutoStart", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.AUTO_START] ?: false)
@@ -1949,6 +1954,14 @@ class CloudSyncRepository @Inject constructor(
                 val live = com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs
                 if (root.has("liveAiSubsEnabled")) prefs[live.ENABLED] = root.optBoolean("liveAiSubsEnabled", false)
                 if (root.has("liveAiSubsAutoStart")) prefs[live.AUTO_START] = root.optBoolean("liveAiSubsAutoStart", false)
+            }
+        }
+        // GMC: Claude Haiku. has() guards: snapshots from builds without these fields leave the box's own.
+        run {
+            val claude = com.arflix.tv.ui.screens.player.subtitles.GmcClaudePrefs
+            if (root.has("gmcClaudeApiKey")) claude.setApiKey(context, root.optString("gmcClaudeApiKey", ""))
+            if (root.has("gmcClaudeEnabled")) {
+                claude.setEnabled(context, root.optBoolean("gmcClaudeEnabled", false) && claude.looksLikeKey(claude.apiKey(context)))
             }
         }
         if (preservedNewerLocalSubtitle) {

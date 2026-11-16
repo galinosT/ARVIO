@@ -16,7 +16,9 @@ export function useAiSubtitleTranslation({ activeSubtitle, aiAvailable, aiSubsAc
     const video = videoRef.current;
     const track = subtitleState.track;
     if (!video || !track) return undefined;
-    const translator = new SubtitleTranslator(settings.aiApiKey, settings.aiSubtitleModel === "gemini" ? "gemini" : "groq", aiTargetName);
+    const translator = settings.gmcClaudeEnabled && settings.gmcClaudeApiKey
+      ? new SubtitleTranslator(settings.gmcClaudeApiKey, "claude", aiTargetName)
+      : new SubtitleTranslator(settings.aiApiKey, settings.aiSubtitleModel === "gemini" ? "gemini" : "groq", aiTargetName);
     translator.onTranslatingChanged = setAiTranslating;
     let lastErrorToast = 0;
     translator.onError = (failure) => {
@@ -57,7 +59,7 @@ export function useAiSubtitleTranslation({ activeSubtitle, aiAvailable, aiSubsAc
       setAiTranslating(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiSubsActive, aiAvailable, activeSubtitle, subtitleState.track, stream.url, settings.aiApiKey, settings.aiSubtitleModel, aiTargetName]);
+  }, [aiSubsActive, aiAvailable, activeSubtitle, subtitleState.track, stream.url, settings.aiApiKey, settings.aiSubtitleModel, settings.gmcClaudeEnabled, settings.gmcClaudeApiKey, aiTargetName]);
 }
 
 /** Embedded text tracks, the external subtitle download and the per-title subtitle delay. */

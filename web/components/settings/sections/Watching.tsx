@@ -285,13 +285,21 @@ export function SubtitlesSection() {
 const PROVIDERS = {
   groq: { name: "Groq", keyUrl: "https://console.groq.com/keys", note: "Free, very fast. About 30 requests a minute on the free plan." },
   gemini: { name: "Gemini", keyUrl: "https://aistudio.google.com/apikey", note: "Google's free tier. Handles more languages well." },
+  // GMC: Claude Haiku, the best translation; a paid Anthropic key (about $0.02–0.05 an episode).
+  claude: { name: "Claude Haiku", keyUrl: "https://console.anthropic.com/settings/keys", note: "Best quality. Paid Anthropic key, about $0.02–0.05 an episode." },
 } as const;
 
-async function testKey(provider: "groq" | "gemini", key: string): Promise<"ok" | "bad" | "limit" | "error"> {
+// GMC-only wording, kept out of ARVIO's translated phrase set.
+const GMC_CLAUDE_KEY_FROM = "Get it from";
+const GMC_CLAUDE_NOTE = "Claude translates the subtitles. Hearing reference and live TV subtitles still use the Gemini key, if one is set: choose Gemini above to change it, then pick Claude Haiku again.";
+
+async function testKey(provider: "groq" | "gemini" | "claude", key: string): Promise<"ok" | "bad" | "limit" | "error"> {
   try {
     const response = provider === "groq"
       ? await fetch("https://api.groq.com/openai/v1/models", { headers: { Authorization: `Bearer ${key}` } })
-      : await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { headers: { "x-goog-api-key": key } });
+      : provider === "claude"
+        ? await fetch("https://api.anthropic.com/v1/models?limit=1", { headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" } })
+        : await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { headers: { "x-goog-api-key": key } });
     if (response.ok) return "ok";
     if (response.status === 429) return "limit";
     if (response.status === 400 || response.status === 401 || response.status === 403) return "bad";
@@ -304,7 +312,10 @@ async function testKey(provider: "groq" | "gemini", key: string): Promise<"ok" |
 export function AiSubtitlesSection({ openSection }: { openSection: (id: string) => void }) {
   const translateUi = useTranslation();
   const [settings, set] = useSettings();
-  const provider = settings.aiSubtitleModel === "gemini" ? "gemini" : "groq";
+  const baseProvider = settings.aiSubtitleModel === "gemini" ? "gemini" : "groq";
+  const provider = settings.gmcClaudeEnabled ? "claude" : baseProvider;
+  const keyValue = provider === "claude" ? settings.gmcClaudeApiKey : settings.aiApiKey;
+  const setKey = (v: string) => set(provider === "claude" ? { gmcClaudeApiKey: v } : { aiApiKey: v });
   const [check, setCheck] = useState<null | "busy" | "ok" | "bad" | "limit" | "error">(null);
   // A result only counts for the key and provider it was run with.
   const checkRun = useRef(0);
@@ -315,7 +326,7 @@ export function AiSubtitlesSection({ openSection }: { openSection: (id: string) 
     <>
       <SectionHeader title="AI subtitles" description="When a film has English subtitles but none in your language, ARVIO can translate them as you watch. It uses your own free API key, so there's nothing to pay." />
       <Group>
-        <Row id="ai-enabled" label="AI subtitle translation" hint="Translate subtitles in real time using Groq or Gemini." scope="all">
+        <Row id="ai-enabled" label="AI subtitle translation" hint="Translate subtitles in real time using Groq, Gemini or Claude Haiku." scope="all">
           <Toggle label="AI subtitle translation" value={settings.aiSubtitlesEnabled} onChange={(v) => set({ aiSubtitlesEnabled: v, ...(settings.aiSubtitleModel === "off" ? { aiSubtitleModel: "groq" } : {}) })} />
         </Row>
         <Row id="ai-target" label="Translate into" scope="all"
@@ -325,23 +336,23 @@ export function AiSubtitlesSection({ openSection }: { openSection: (id: string) 
         </Row>
       </Group>
 
-      <Group title="Provider and key" description="Both providers have a free tier. Create a key, paste it here, and it's used on ARVIO Web and your Android and TV app.">
+      <Group title="Provider and key" description="Groq and Gemini have a free tier; Claude Haiku is paid. Create a key, paste it here, and it's used here and on every GMC box of this account.">
         <div className="st-choice" role="radiogroup" aria-label={translateUi("AI provider")}>
           {(Object.keys(PROVIDERS) as Array<keyof typeof PROVIDERS>).map((id) => (
             <button key={id} type="button" role="radio" aria-checked={provider === id} className={provider === id ? "is-active" : ""}
-              onClick={() => { set({ aiSubtitleModel: id }); checkRun.current++; setCheck(null); }}>
+              onClick={() => { set(id === "claude" ? { gmcClaudeEnabled: true } : { aiSubtitleModel: id, gmcClaudeEnabled: false }); checkRun.current++; setCheck(null); }}>
               <strong>{PROVIDERS[id].name}{provider === id && <Status tone="ok">{translateUi("Selected")}</Status>}</strong>
               <span>{translateUi(PROVIDERS[id].note)}</span>
             </button>
           ))}
         </div>
         <Row id="ai-key" label={`${info.name} API key`} stack scope="all"
-          hint={<>{translateUi("Free from")} <a className="st-link" href={info.keyUrl} target="_blank" rel="noreferrer">{info.keyUrl.replace("https://", "")} <ExternalLink size={12} /></a>. {translateUi("The key is stored in your ARVIO account so your TV can use it too.")}</>}>
-          <SecretInput label={`${info.name} API key`} value={settings.aiApiKey} placeholder="Paste your key" onChange={(v) => { set({ aiApiKey: v }); checkRun.current++; setCheck(null); }} />
-          <button type="button" className="st-btn" disabled={!settings.aiApiKey || check === "busy"} onClick={async () => {
+          hint={<>{provider === "claude" ? GMC_CLAUDE_KEY_FROM : translateUi("Free from")} <a className="st-link" href={info.keyUrl} target="_blank" rel="noreferrer">{info.keyUrl.replace("https://", "")} <ExternalLink size={12} /></a>. {translateUi("The key is stored in your ARVIO account so your TV can use it too.")}</>}>
+          <SecretInput label={`${info.name} API key`} value={keyValue} placeholder={provider === "claude" ? "sk-ant-…" : "Paste your key"} onChange={(v) => { setKey(v); checkRun.current++; setCheck(null); }} />
+          <button type="button" className="st-btn" disabled={!keyValue || check === "busy"} onClick={async () => {
             const run = ++checkRun.current;
             setCheck("busy");
-            const result = await testKey(provider, settings.aiApiKey);
+            const result = await testKey(provider, keyValue);
             if (run === checkRun.current) setCheck(result);
           }}>
             <KeyRound size={16} /> {translateUi(check === "busy" ? "Checking…" : "Test key")}
@@ -351,6 +362,9 @@ export function AiSubtitlesSection({ openSection }: { openSection: (id: string) 
           {check === "limit" && <Status tone="warn">{translateUi("Key works, but the rate limit is reached right now")}</Status>}
           {check === "error" && <Status tone="warn">{translateUi("Couldn't reach {value0}. Try again.", { value0: info.name })}</Status>}
         </Row>
+        {provider === "claude" && (
+          <p className="st-note">{GMC_CLAUDE_NOTE}</p>
+        )}
         <p className="st-note">{translateUi("Clearing the key here stops ARVIO Web using it. A TV that already has the key keeps it until you remove it on the TV.")}</p>
       </Group>
 

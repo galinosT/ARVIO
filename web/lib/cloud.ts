@@ -567,6 +567,8 @@ function settingsFromAndroidProfile(value: unknown): Partial<AppSettings> {
   if ("subtitleAiAutoSelect" in state) partial.aiAutoSelect = Boolean(state.subtitleAiAutoSelect);
   if ("subtitleAiApiKey" in state) partial.aiApiKey = String(state.subtitleAiApiKey || "");
   if ("subtitleAiModel" in state) partial.aiSubtitleModel = webAiModel(state.subtitleAiModel);
+  if ("gmcClaudeEnabled" in state) partial.gmcClaudeEnabled = Boolean(state.gmcClaudeEnabled);
+  if ("gmcClaudeApiKey" in state) partial.gmcClaudeApiKey = String(state.gmcClaudeApiKey || "");
   if ("subtitleStylized" in state) partial.subtitleStylized = Boolean(state.subtitleStylized);
   if ("subtitleFont" in state && typeof state.subtitleFont === "string" && state.subtitleFont.trim()) partial.subtitleFont = state.subtitleFont.trim();
   if ("useForcedSubtitles" in state) partial.useForcedSubtitles = Boolean(state.useForcedSubtitles);
@@ -943,6 +945,9 @@ export async function pullCloudPayload(auth: AuthClient, profileId?: string | nu
   // Android stores GROQ_LLAMA_70B / GEMINI_FLASH_25; older web builds wrote groq/gemini/off.
   if ("subtitleAiModel" in root) globalSettings.aiSubtitleModel = webAiModel(root.subtitleAiModel);
   if ("subtitleAiFindBestMatch" in root) globalSettings.aiFindBestMatch = Boolean(root.subtitleAiFindBestMatch);
+  // GMC: Claude Haiku switch and key, the same fields the GMC app syncs.
+  if ("gmcClaudeEnabled" in root) globalSettings.gmcClaudeEnabled = Boolean(root.gmcClaudeEnabled);
+  if ("gmcClaudeApiKey" in root) globalSettings.gmcClaudeApiKey = String(root.gmcClaudeApiKey ?? "");
   if ("subtitlePreloadEnabled" in root) globalSettings.subtitlePreload = root.subtitlePreloadEnabled !== false;
   if ("dolbyVisionCompatEnabled" in root) globalSettings.dolbyVisionCompat = root.dolbyVisionCompatEnabled !== false;
   if ("telegramSearchOnClickOnly" in root) globalSettings.telegramSearchOnClickOnly = root.telegramSearchOnClickOnly !== false;
@@ -1349,6 +1354,8 @@ export async function saveCloudSettings(
       ["subtitleAiApiKey", settings.aiApiKey, baseline?.aiApiKey],
       ["subtitleAiModel", androidAiModel(settings.aiSubtitleModel), baseline ? androidAiModel(baseline.aiSubtitleModel) : undefined],
       ["subtitleAiFindBestMatch", settings.aiFindBestMatch, baseline?.aiFindBestMatch],
+      ["gmcClaudeEnabled", settings.gmcClaudeEnabled, baseline?.gmcClaudeEnabled],
+      ["gmcClaudeApiKey", settings.gmcClaudeApiKey, baseline?.gmcClaudeApiKey],
       ["subtitlePreloadEnabled", settings.subtitlePreload, baseline?.subtitlePreload],
       ["dolbyVisionCompatEnabled", settings.dolbyVisionCompat, baseline?.dolbyVisionCompat],
       ["telegramSearchOnClickOnly", settings.telegramSearchOnClickOnly, baseline?.telegramSearchOnClickOnly],
