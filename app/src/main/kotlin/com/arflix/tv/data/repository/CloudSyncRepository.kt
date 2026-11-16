@@ -1077,10 +1077,17 @@ class CloudSyncRepository @Inject constructor(
         runCatching {
             val root = JSONObject(json)
             require(root.has("profiles") || root.has("profileSettingsById")) { "not a GMC/ARVIO settings file" }
+            // A file restore is the user saying "make this box look like the file". Cloud sync keeps a
+            // field when the box changed it more recently than the incoming copy (catalogs, IPTV and
+            // every timestamped setting), which silently dropped e.g. Simkl list catalogs on import.
+            // Stamp every field in the file as just changed so the file wins, and push the result.
+            val now = System.currentTimeMillis()
+            root.put("fieldUpdatedAt", JSONObject().apply { mergeKeysOf(root).forEach { put(it, now) } })
             invalidationBus.suppressDuringRemoteApply {
                 clearStaleLocalDirtyBeforeRemoteRestore()
-                applyCloudPayload(json)
+                applyCloudPayload(root.toString())
             }
+            markLocalStateDirtyNow()
             Unit
         }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
     }
@@ -1945,7 +1952,7 @@ class CloudSyncRepository @Inject constructor(
             }
         }
         if (preservedNewerLocalSubtitle) {
-            markLocalStateDirty()
+            markLocalStateDirtyNow()
         } else {
             authRepository.saveDefaultSubtitleToProfile(fallbackDefaultSubtitle)
         }
