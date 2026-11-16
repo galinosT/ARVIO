@@ -16,7 +16,7 @@ import javax.inject.Singleton
 /**
  * The user's own lists on the connected tracking services, for "Add to list".
  *
- * Trakt, MDBList and (GMC) Simkl can all be connected; their lists are shown together, tagged with
+ * Trakt, MDBList, WeTrakr and (GMC) Simkl can all be connected; their lists are shown together, tagged with
  * the service they live on. Only lists that can take items are offered (MDBList's
  * dynamic, filter-based lists cannot).
  */
@@ -26,9 +26,11 @@ class PersonalListsRepository @Inject constructor(
     private val mdbListRepository: MdbListRepository,
     // GMC: the user's own Simkl lists (PRO/VIP), through the device's Simkl V2 connection.
     private val simklListsRepository: com.arflix.tv.data.repository.simkl.SimklListsRepository,
+    // WeTrakr lists (free: 5 lists of up to 250 titles), through the device's WeTrakr connection.
+    private val weTrakrLists: com.arflix.tv.data.repository.wetrakr.WeTrakrLists,
     private val mediaRepository: MediaRepository,
 ) {
-    enum class Provider(val label: String) { TRAKT("Trakt"), MDBLIST("MDBList"), SIMKL("Simkl") }
+    enum class Provider(val label: String) { TRAKT("Trakt"), MDBLIST("MDBList"), SIMKL("Simkl"), WETRAKR("WeTrakr") }
 
     data class UserList(val provider: Provider, val id: String, val title: String) {
         val key: String get() = "${provider.name}:$id"
@@ -40,7 +42,7 @@ class PersonalListsRepository @Inject constructor(
     /** Whether any service with personal lists is connected for the active profile. */
     suspend fun hasProvider(): Boolean =
         traktRepository.isAuthenticated.first() || mdbListRepository.isConnected() ||
-            simklListsRepository.isConnected()
+            simklListsRepository.isConnected() || weTrakrLists.isConnected()
 
     /** Every list with the title's membership, loaded in parallel. */
     suspend fun choicesFor(mediaType: MediaType, tmdbId: Int): List<Choice> = coroutineScope {
@@ -82,8 +84,21 @@ class PersonalListsRepository @Inject constructor(
                     }
                 }.awaitAll()
         }
-        trakt.await() + mdb.await() + simkl.await()
+        val weTrakr = async {
+            if (!weTrakrLists.isConnected()) return@async emptyList()
+            val lists = runCatching { weTrakrLists.ownLists() }.getOrDefault(emptyList()).filterNot { it.locked }
+            if (lists.isEmpty()) return@async emptyList()
+            val holding = runCatching { weTrakrLists.listsHolding(mediaType, tmdbId) }.getOrDefault(emptySet())
+            lists.map { list -> Choice(UserList(Provider.WETRAKR, list.id.toString(), list.name), list.id in holding) }
+        }
+        trakt.await() + mdb.await() + simkl.await() + weTrakr.await()
     }
+
+    /** The user's WeTrakr lists for the Library, and the titles of one of them. */
+    suspend fun weTrakrLibraryLists(): List<com.arflix.tv.data.repository.wetrakr.WeTrakrLists.UserList> =
+        if (!weTrakrLists.isConnected()) emptyList() else weTrakrLists.ownLists().filterNot { it.locked }
+
+    suspend fun weTrakrListItems(listId: Long) = weTrakrLists.listItems(listId)
 
     /** A Simkl list typed for movies takes no shows and the other way round; mixed lists take both. */
     private fun simklListFits(listType: String, isMovie: Boolean): Boolean {
@@ -136,6 +151,9 @@ class PersonalListsRepository @Inject constructor(
                         id, tmdbId, mediaRepository.getCachedImdbId(mediaType, tmdbId), mediaType == MediaType.MOVIE, add
                     )
                 }.getOrDefault(false)
+            } ?: false
+            Provider.WETRAKR -> list.id.toLongOrNull()?.let { id ->
+                runCatching { weTrakrLists.setMembership(id, mediaType, tmdbId, add) }.getOrDefault(false)
             } ?: false
         }
         if (ok) {
