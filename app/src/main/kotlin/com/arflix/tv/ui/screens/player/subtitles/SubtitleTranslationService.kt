@@ -347,7 +347,8 @@ class SubtitleTranslationService(
         // the way down is shown in its original language. Depth cap keeps worst-case extra API
         // calls bounded (window → halves → quarters).
         if (!result.success &&
-            result.errorMessage == TRANSLATION_ERROR_CONTENT_BLOCKED &&
+            // GMC: a Claude reply cut off at max_tokens is split the same way (half fits).
+            (result.errorMessage == TRANSLATION_ERROR_CONTENT_BLOCKED || result.errorMessage == CLAUDE_ERROR_MAX_TOKENS) &&
             lines.size >= 2 && depth < 2
         ) {
             Log.w(TAG, "Content-blocked batch of ${lines.size} — bisecting (depth=$depth)")

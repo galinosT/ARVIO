@@ -29,6 +29,23 @@ private const val CLAUDE_API_VERSION = "2023-06-01"
 private const val CLAUDE_MAX_TOKENS = 8000
 private const val CLAUDE_MAX_TRANSIENT_RETRIES = 2
 private val CLAUDE_RETRYABLE_HTTP = setOf(500, 502, 503, 529)
+// Not streamed: nothing arrives until the whole batch is done, so the shared 30 s read timeout
+// could expire on a slow reply and retry (and bill) it again.
+private const val CLAUDE_READ_TIMEOUT_SECONDS = 90L
+
+/** The reply was cut off at max_tokens; the batch is bisected like a content block. */
+internal const val CLAUDE_ERROR_MAX_TOKENS = "MAX_TOKENS"
+
+@Volatile private var claudeClient: Pair<OkHttpClient, OkHttpClient>? = null
+
+private fun claudeClientFor(base: OkHttpClient): OkHttpClient {
+    claudeClient?.takeIf { it.first === base }?.let { return it.second }
+    val builder = base.newBuilder().readTimeout(CLAUDE_READ_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    if (base.callTimeoutMillis in 1 until (CLAUDE_READ_TIMEOUT_SECONDS + 30) * 1000) {
+        builder.callTimeout(CLAUDE_READ_TIMEOUT_SECONDS + 30, java.util.concurrent.TimeUnit.SECONDS)
+    }
+    return builder.build().also { claudeClient = base to it }
+}
 
 /** Device-local settings. Never synced. */
 object GmcClaudePrefs {
@@ -87,6 +104,8 @@ internal suspend fun claudeTranslateCall(
             put("content", userText)
         }))
         put("output_config", JSONObject().put("effort", "low"))
+        // Thinking off: subtitle batches need speed, not reasoning; it also ate into max_tokens.
+        put("thinking", JSONObject().put("type", "disabled"))
     }
     val request = Request.Builder()
         .url(CLAUDE_URL)
@@ -104,7 +123,7 @@ internal suspend fun claudeTranslateCall(
 
     val outcome: Any = withContext(Dispatchers.IO) {
         try {
-            client.newCall(request).execute().use { response ->
+            claudeClientFor(client).newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 when {
                     response.isSuccessful -> parseClaudeReply(text)
@@ -139,6 +158,9 @@ private fun parseClaudeReply(body: String): ClaudeReply {
             if (block.optString("type") == "text") append(block.optString("text"))
         }
     }.trim()
-    if (json.optString("stop_reason") == "max_tokens") Log.w(TAG, "Claude reply hit max_tokens")
+    if (json.optString("stop_reason") == "max_tokens") {
+        Log.w(TAG, "Claude reply hit max_tokens")
+        return ClaudeReply.Failed(CLAUDE_ERROR_MAX_TOKENS)
+    }
     return if (text.isBlank()) ClaudeReply.Failed("Empty Claude response") else ClaudeReply.Text(text)
 }
