@@ -2896,7 +2896,11 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /** GMC: the embedded-subtitle check before an autoplay start (see GmcEmbeddedSubtitlePick). */
+    private var gmcSubtitlePickJob: Job? = null
+
     private fun autoplaySelectBest(streams: List<StreamSource>, preferredLanguage: String) {
+        if (gmcSubtitlePickJob?.isActive == true) return
         if (!canStartAutoplay()) return
         val healthyStreams = sortStreamsByQualityAndSize(
             eligiblePlayerAutoplayStreams(streams, autoPlayMinimumQuality, autoPlayLimits), preferredLanguage
@@ -2940,7 +2944,30 @@ class PlayerViewModel @Inject constructor(
                 "usedRecent=${recentCandidate != null} " +
                 "usedPreferred=${hasExplicitPreferred && (selected === preferredFromBingeGroup || selected === preferredNavigationCandidate)}"
         )
-        selectStream(selected)
+        // GMC: a source chosen by ranking (not the one last watched, not one asked for) gives way to
+        // a same-resolution source with an embedded subtitle in the viewer's language.
+        val subtitleLang = targetSubtitleLangCode
+        val pickCandidates = if (
+            recentCandidate == null && !hasExplicitPreferred && !currentIsLiveStreamPlayback &&
+            subtitleLang.isNotBlank() && GmcEmbeddedSubtitlePick.isEnabled(context)
+        ) {
+            GmcEmbeddedSubtitlePick.candidates(selected, healthyStreams) { qualityScore(it.quality) }
+        } else {
+            emptyList()
+        }
+        if (pickCandidates.isEmpty()) {
+            selectStream(selected)
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            streamLoadPhase = PlayerMessage.Raw("Έλεγχος για ενσωματωμένους υπότιτλους…")
+        )
+        gmcSubtitlePickJob = viewModelScope.launch {
+            val picked = runCatching { GmcEmbeddedSubtitlePick.pick(context, pickCandidates, subtitleLang) }.getOrNull()
+            playbackDiag("gmcEmbeddedSubtitlePick picked=${streamDiag(picked)}")
+            gmcSubtitlePickJob = null
+            if (canStartAutoplay()) selectStream(picked ?: selected)
+        }
     }
 
     private fun hasRequestedPreferredStream(streams: List<StreamSource>): Boolean {
@@ -3188,6 +3215,9 @@ class PlayerViewModel @Inject constructor(
      * Select a stream for playback
      */
     fun selectStream(stream: StreamSource, resumePositionMs: Long? = null) {
+        // A source chosen by hand (or by the check itself) ends a running embedded-subtitle check.
+        gmcSubtitlePickJob?.takeIf { it.isActive }?.cancel()
+        gmcSubtitlePickJob = null
         subtitleMenuCandidates.entries.removeAll { it.value.isEmbedded }
         streamSelectionJob?.cancel()
         playbackErrorReportJob?.cancel()
