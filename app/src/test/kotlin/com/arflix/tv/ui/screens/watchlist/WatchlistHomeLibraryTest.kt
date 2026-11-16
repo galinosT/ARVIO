@@ -210,7 +210,7 @@ class WatchlistHomeLibraryTest {
 
     @Test fun customListsPageBeyondTheOld120ItemLimit() {
         val catalog = CatalogConfig("large-list", "Large list", CatalogSourceType.TRAKT)
-        coEvery { media.loadCustomCatalogPage(any(), any(), any()) } answers {
+        coEvery { media.loadCustomCatalogPage(any(), any(), any(), any()) } answers {
             val offset = arg<Int>(1)
             val end = (offset + 60).coerceAtMost(305)
             MediaRepository.CategoryPageResult((offset until end).map { MediaItem(id = it + 1, title = "Movie $it") }, end < 305, end)
