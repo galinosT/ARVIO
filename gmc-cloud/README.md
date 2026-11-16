@@ -42,6 +42,14 @@ gmc.projectneverland.gr {
 	handle @backend {
 		reverse_proxy gmc-cloud:8790
 	}
+	# The dashboard's "Connect to Cloud" opens the account page at /?redirect_uri=...
+	@portal {
+		path /
+		query redirect_uri=*
+	}
+	handle @portal {
+		reverse_proxy gmc-cloud:8790
+	}
 	handle {
 		reverse_proxy dashboard:3000
 	}

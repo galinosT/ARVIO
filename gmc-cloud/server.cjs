@@ -187,6 +187,29 @@ const TYPES = {
   ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"
 };
 
+/**
+ * The account page sends the web app back only to arvio.tv hosts after sign-in. Add this server's
+ * own host(s) (SITE_URL, GMC_REDIRECT_HOSTS) so the GMC dashboard's "Connect to Cloud" returns home.
+ */
+let patchedIndex = null;
+function allowOwnRedirects(data) {
+  if (patchedIndex) return patchedIndex;
+  const hosts = new Set((process.env.GMC_REDIRECT_HOSTS || "").split(",").map((s) => s.trim()).filter(Boolean));
+  try { if (process.env.SITE_URL) hosts.add(new URL(process.env.SITE_URL).hostname); } catch {}
+  let html = data.toString("utf8");
+  const anchor = "const isArvioDomain =";
+  const check = "(isLocal || isArvioDomain";
+  if (!hosts.size || !html.includes(anchor) || !html.includes(check)) {
+    if (hosts.size) console.warn("[static] index.html redirect check changed upstream; GMC hosts not added");
+    patchedIndex = data;
+    return data;
+  }
+  html = html.replace(anchor, `const isGmcHost = url.protocol === "https:" && ${JSON.stringify([...hosts])}.includes(url.hostname);\n        ${anchor}`)
+    .replace(check, "(isLocal || isGmcHost || isArvioDomain");
+  patchedIndex = Buffer.from(html);
+  return patchedIndex;
+}
+
 function serveStatic(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   for (const [re, to] of REWRITES) if (re.test(pathname)) pathname = to;
@@ -198,7 +221,8 @@ function serveStatic(req, res, url) {
   if (!file.startsWith(SITE + path.sep)) return sendJson(res, 404, { error: "Not found" });
   try {
     if (fs.statSync(file).isDirectory()) file = path.join(file, "index.html");
-    const data = fs.readFileSync(file);
+    let data = fs.readFileSync(file);
+    if (file === path.join(SITE, "index.html")) data = allowOwnRedirects(data);
     return send(res, 200, {
       "content-type": TYPES[path.extname(file)] || "application/octet-stream",
       "cache-control": file.endsWith(".html") ? "no-store" : "public, max-age=3600",
