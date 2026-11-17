@@ -3676,7 +3676,25 @@ class MediaRepository @Inject constructor(
         return ParsedCatalogUrl.Tmdb(kind = kind, id = id, mediaType = mediaType, slug = null)
     }
 
+    /**
+     * GMC: a Home row of one of the box's own WeTrakr lists ("wetrakr_list:<name or id>", added in
+     * the dashboard). It rides on the SIMKL source type; empty until WeTrakr is connected.
+     */
+    private suspend fun loadWeTrakrListRefs(ref: String, limit: Int): List<Pair<MediaType, Int>> {
+        if (!weTrakrLists.isConnected()) return emptyList()
+        val wanted = ref.trim()
+        val lists = try { weTrakrLists.ownLists() } catch (e: CancellationException) { throw e } catch (_: Exception) { return emptyList() }
+        val list = wanted.toLongOrNull()?.let { id -> lists.firstOrNull { it.id == id } }
+            ?: lists.firstOrNull { it.name.trim().equals(wanted, ignoreCase = true) }
+            ?: return emptyList()
+        val items = try { weTrakrLists.listItems(list.id) } catch (e: CancellationException) { throw e } catch (_: Exception) { return emptyList() }
+        return items.asSequence().filter { it.id > 0 }.map { it.mediaType to it.id }.distinct().take(limit).toList()
+    }
+
     private suspend fun loadSimklCatalogRefs(catalog: CatalogConfig, limit: Int): List<Pair<MediaType, Int>> = coroutineScope {
+        catalog.sourceRef?.takeIf { it.startsWith(GMC_WETRAKR_LIST_PREFIX, ignoreCase = true) }?.let { ref ->
+            return@coroutineScope loadWeTrakrListRefs(ref.substring(GMC_WETRAKR_LIST_PREFIX.length), limit)
+        }
         val id = catalog.sourceRef?.removePrefix("simkl_list:")?.toLongOrNull()
             ?: catalog.sourceUrl?.let { CatalogUrlParser.parseSimkl(it)?.id } ?: return@coroutineScope emptyList()
         val list = simklListsRepository?.load(id) ?: return@coroutineScope emptyList()
@@ -4108,3 +4126,6 @@ private object MediaRegexes {
     val IMDB_ID_REGEX = Regex("""tt\d{5,}""", RegexOption.IGNORE_CASE)
     val TRAKT_URL_REGEX = Regex("""https?://(?:www\.)?trakt\.tv/users/[^"'\s<]+/lists/[^"'\s<]+""", RegexOption.IGNORE_CASE)
 }
+
+/** GMC: sourceRef of a Home row showing one of the box's WeTrakr lists (by name or id). */
+internal const val GMC_WETRAKR_LIST_PREFIX = "wetrakr_list:"

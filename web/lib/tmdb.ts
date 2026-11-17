@@ -334,6 +334,8 @@ async function loadCatalogUnlimited(
 
   // Favorite TV is the profile's IPTV favorites; Home renders it from the channel list.
   if (catalog.sourceType === "preinstalled" && catalog.id === "favorite_tv") return null;
+  // GMC: a WeTrakr list row (sourceRef "wetrakr_list:…") also needs the TV's WeTrakr connection.
+  if (catalog.sourceRef?.toLowerCase().startsWith("wetrakr_list:")) return null;
   // WeTrakr recommendations need the TV's WeTrakr connection; the web has none.
   if (catalog.sourceType === "preinstalled" && catalog.id.startsWith("wetrakr_")) return null;
 

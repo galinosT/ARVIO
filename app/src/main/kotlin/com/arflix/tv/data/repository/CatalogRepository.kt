@@ -1820,6 +1820,8 @@ class CatalogRepository @Inject constructor(
             sourceRef?.startsWith(ADDON_SOURCE_REF_PREFIX, ignoreCase = true) == true -> CatalogSourceType.ADDON
             sourceRef?.startsWith(YouTubeCollection.SOURCE_REF_PREFIX) == true -> CatalogSourceType.YOUTUBE
             sourceRef?.startsWith("simkl_list:", ignoreCase = true) == true -> CatalogSourceType.SIMKL
+            // GMC: WeTrakr list rows load through the SIMKL path (see MediaRepository.loadWeTrakrListRefs).
+            sourceRef?.startsWith(GMC_WETRAKR_LIST_PREFIX, ignoreCase = true) == true -> CatalogSourceType.SIMKL
             sourceUrl?.let { CatalogUrlParser.parseSimkl(it) } != null -> CatalogSourceType.SIMKL
             sourceRef?.startsWith("trakt_", ignoreCase = true) == true -> CatalogSourceType.TRAKT
             sourceRef?.startsWith("mdblist", ignoreCase = true) == true -> CatalogSourceType.MDBLIST

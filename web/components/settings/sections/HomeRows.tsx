@@ -159,6 +159,23 @@ export function CatalogsSection() {
     if (!customCatalogUrl.trim()) { setToast("Enter a catalog URL first."); return; }
     const simkl = parseSimklListUrl(customCatalogUrl);
     if (simkl) { await addSimklCatalog(simkl.url); return; }
+    // GMC: "wetrakr: <list name>" (or a WeTrakr list URL) adds a row of one of the TV's own WeTrakr
+    // lists. The TV loads it through its WeTrakr connection; the web shows nothing for it.
+    const weTrakrRef = (() => {
+      const raw = customCatalogUrl.trim();
+      const named = raw.match(/^wetrakr\s*:\s*(.+)$/i);
+      if (named) return named[1].trim();
+      const url = raw.match(/wetrakr\.[a-z.]+\/.*?lists?\/(\d+)/i);
+      return url ? url[1] : null;
+    })();
+    if (weTrakrRef) {
+      const sourceRef = `wetrakr_list:${weTrakrRef}`;
+      if (catalogs.some((c) => c.sourceRef?.toLowerCase() === sourceRef.toLowerCase())) { setToast("This catalogue is already added."); return; }
+      updateCatalogs([{ id: `custom_${crypto.randomUUID()}`, name: /^\d+$/.test(weTrakrRef) ? "WeTrakr list" : weTrakrRef,
+        sourceType: "simkl", sourceRef, mediaType: "all", enabled: true }, ...catalogs]);
+      setCustomCatalogUrl("");
+      return;
+    }
     updateCatalogs([{ id: `custom_${crypto.randomUUID()}`, name: "Custom MDBList", sourceType: "mdblist", mediaType: "all", sourceUrl: customCatalogUrl.trim(), enabled: true }, ...catalogs]);
     setCustomCatalogUrl("");
   };
@@ -304,7 +321,7 @@ export function CatalogsSection() {
         </div>
       </Group>
 
-      <Group title="Add a list" description="Paste a Trakt, MDBList or SIMKL list URL. SIMKL custom-list contents require SIMKL PRO or VIP.">
+      <Group title="Add a list" description="Paste a Trakt, MDBList or SIMKL list URL. SIMKL custom-list contents require SIMKL PRO or VIP. For one of the TV's WeTrakr lists, type wetrakr: and the list name (e.g. wetrakr: TV Shows).">
         <div className="st-form">
           <input className="st-input" value={customCatalogUrl} onChange={(e) => setCustomCatalogUrl(e.target.value)} placeholder="Trakt / MDBList / SIMKL list URL"
             aria-label={translateUi("List URL")} onKeyDown={(e) => { if (e.key === "Enter") void addList(); }} />
