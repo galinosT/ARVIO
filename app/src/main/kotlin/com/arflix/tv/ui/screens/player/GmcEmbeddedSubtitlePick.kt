@@ -35,7 +35,7 @@ internal object GmcEmbeddedSubtitlePick {
     private const val TAG = "GmcEmbeddedSubs"
     private const val PREFS = "gmc_local"
     private const val KEY = "prefer_embedded_target_subs"
-    private const val MAX_CANDIDATES = 3
+    private const val MAX_CANDIDATES = 5
     private const val PROBE_TIMEOUT_MS = 7_000L
 
     fun isEnabled(context: Context): Boolean =
