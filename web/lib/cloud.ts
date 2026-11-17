@@ -1367,8 +1367,11 @@ export async function saveCloudSettings(
       (key === "subtitleAiModel" && typeof root.subtitleAiModel === "string" && !["GROQ_LLAMA_70B", "GEMINI_FLASH_25"].includes(root.subtitleAiModel)) ||
       // Only the web's own accent ids; an unknown value (e.g. a hex colour) is left as it is.
       (key === "accentColor" && typeof root.accentColor === "string" && root.accentColor in ACCENT_TO_ANDROID);
+    // GMC: a session without a baseline (a browser that just signed in, or a profile switch) never
+    // asserts its values: they are this browser's defaults, not edits, and asserting them with a
+    // fresh timestamp overwrote the boxes' AI subtitle keys and switches. Only real edits are written.
     for (const [rootKey, newVal, baseVal] of globalFields) {
-      if (!baseline || !sameFieldValue(newVal, baseVal) || legacyRoot(rootKey)) {
+      if ((baseline && !sameFieldValue(newVal, baseVal)) || legacyRoot(rootKey)) {
         root[rootKey] = newVal;
         bumpFieldTs(root, `g:${rootKey}`, changedAt);
       }
@@ -1395,7 +1398,7 @@ export async function saveCloudSettings(
     ] as const;
     const catalogValues = {} as Pick<AppSettings, "catalogs" | "hiddenCatalogIds" | "hiddenAddonCatalogIds" | "hiddenHomeServerCatalogIds">;
     for (const [setting, field] of catalogFields) {
-      const changed = !baseline || !sameFieldValue(settings[setting], baseline[setting]);
+      const changed = Boolean(baseline) && !sameFieldValue(settings[setting], baseline![setting]);
       const existing = scopedValue<unknown[]>(root, field, profileId);
       let value = (changed ? settings[setting] : (existing ?? settings[setting])) ?? [];
       if (changed && baseline && existing) {
@@ -1438,7 +1441,7 @@ export async function saveCloudSettings(
       const unionFields = new Set(["catalogueRowLayoutModes", "streamMacroEnabledMap", "streamProviderEnabledMap"]);
       for (const field of Object.keys(newProfile)) {
         if (skip.has(field)) continue;
-        if (!baseProfile || !sameFieldValue(newProfile[field], baseProfile[field])) {
+        if (baseProfile && !sameFieldValue(newProfile[field], baseProfile[field])) {
           merged[field] = unionFields.has(field)
             ? { ...objectRecord(existing[field]), ...objectRecord(newProfile[field]) }
             : newProfile[field];
@@ -1447,12 +1450,12 @@ export async function saveCloudSettings(
       }
       // Android applies trailerAutoPlay / netflixHomeStyle only from payloads that declare the
       // current home presentation (HomePresentationMigration).
-      if (["trailerAutoPlay", "netflixHomeStyle"].some((field) => field in newProfile && (!baseProfile || !sameFieldValue(newProfile[field], baseProfile[field])))) {
+      if (["trailerAutoPlay", "netflixHomeStyle"].some((field) => field in newProfile && baseProfile && !sameFieldValue(newProfile[field], baseProfile[field]))) {
         merged.homePresentationVersion = Math.max(1, Number(merged.homePresentationVersion) || 0);
       }
       // defaultSubtitle uses Android's own subtitleSettingsUpdatedAt LWW — assert it only when the
       // web actually changed it, bumping that timestamp so Android adopts it.
-      if (!baseline || !sameFieldValue(settings.defaultSubtitle, baseline.defaultSubtitle)) {
+      if (baseline && !sameFieldValue(settings.defaultSubtitle, baseline.defaultSubtitle)) {
         merged.defaultSubtitle = settings.defaultSubtitle || "Off";
         merged.subtitleSettingsUpdatedAt = changedAt;
       }
@@ -1463,7 +1466,7 @@ export async function saveCloudSettings(
       const newIptv = androidIptvSettings(settings);
       const baseIptv = baseline ? androidIptvSettings(baseline) : null;
       for (const [field, value] of Object.entries(newIptv)) {
-        if (!baseIptv || !sameIptvField(field, value, baseIptv[field])) {
+        if (baseIptv && !sameIptvField(field, value, baseIptv[field])) {
           bumpFieldTs(root, `i:${profileId}:${field}`, changedAt);
         }
       }
