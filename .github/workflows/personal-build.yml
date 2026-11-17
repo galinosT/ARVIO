@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       cloud_test:
-        description: "GMC Test: a separate app (own package) that syncs with GMC Cloud on the VPS"
+        description: "GMC Test: a separate app (own package), released as a pre-release, for trying changes next to GMC"
         type: boolean
         default: false
   push:
@@ -109,10 +109,9 @@ jobs:
             echo "TRAKT_CLIENT_SECRET=$TRAKT_CLIENT_SECRET"
             grep -vE '^(TMDB_API_KEY|TRAKT_CLIENT_ID|TRAKT_CLIENT_SECRET)=' secrets.defaults.properties
           } > secrets.properties
-          if [ "${{ inputs.cloud_test }}" = "true" ]; then
-            sed -i '/^NETLIFY_BACKEND_URL=/d' secrets.properties
-            echo "NETLIFY_BACKEND_URL=https://gmc.projectneverland.gr/.netlify/functions" >> secrets.properties
-          fi
+          # GMC 2.4+: every build syncs with GMC Cloud on the VPS, not with the ARVIO cloud.
+          sed -i '/^NETLIFY_BACKEND_URL=/d' secrets.properties
+          echo "NETLIFY_BACKEND_URL=https://gmc.projectneverland.gr/.netlify/functions" >> secrets.properties
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/personal.jks"
           {
             echo "storeFile=$RUNNER_TEMP/personal.jks"
@@ -127,6 +126,7 @@ jobs:
           PERSONAL_BUILD: ${{ github.run_number }}
           PERSONAL_PACKAGE: ${{ inputs.cloud_test && 'com.galinos.gmc.cloudtest' || 'com.galinos.gmc' }}
           PERSONAL_APP_NAME: ${{ inputs.cloud_test && 'GMC Test' || 'GMC' }}
+          PERSONAL_VERSION_BASE: "2.4"
         run: python3 personal/personalize.py
 
       - name: Build signed APK

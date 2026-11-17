@@ -66,7 +66,9 @@ def main():
         fail("versionCode/versionName block not found")
     up_code, up_name = int(m.group(2)), m.group(3)
     code = up_code * 1000 + int(build)          # stays above every earlier build, also after upstream bumps
-    version = f"{up_name}.{build}"
+    # GMC's own release line (2.4 = GMC Cloud) instead of ARVIO's version name, when set.
+    base = os.environ.get("PERSONAL_VERSION_BASE", "").strip() or up_name
+    version = f"{base}.{build}"
     g = g.replace(m.group(0), f"\n{m.group(1)}versionCode = {code}\n{m.group(1)}versionName = \"{version}\"\n", 1)
 
     g = replace_once(g, 'buildConfigField("String", "GITHUB_OWNER", "\\"ProdigyV21\\"")',
