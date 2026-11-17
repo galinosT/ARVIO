@@ -340,6 +340,28 @@ export function CatalogsSection() {
         )}
       </Group>
 
+      {/* GMC: built-in rows removed from this profile can be added back one by one, without a reset. */}
+      {(() => {
+        const removed = defaultCatalogs.filter((d) =>
+          d.sourceType === "preinstalled" && String(d.kind).toUpperCase() === "STANDARD" && !catalogs.some((c) => c.id === d.id));
+        if (!removed.length) return null;
+        return (
+          <Group title="Removed built-in rows" description="Built-in rows taken off this profile. Add one back to the end of the list.">
+            <ul className="st-list">
+              {removed.map((row) => (
+                <li className="st-item" key={row.id}>
+                  <div className="st-item-main"><span className="st-item-title"><span>{row.name}</span></span></div>
+                  <button type="button" className="st-btn" onClick={() => updateCatalogs(
+                    [...catalogs, { ...row, enabled: true }],
+                    settings.hiddenCatalogIds.filter((id) => id !== row.id)
+                  )}><Plus size={16} /> {translateUi("Add")}</button>
+                </li>
+              ))}
+            </ul>
+          </Group>
+        );
+      })()}
+
       <Group title="Collections" description="Import a collections pack from a URL or paste its JSON.">
         {hasDefaultCollections ? (
           <Row id="default-collections" label="Default collections" scope="all">
