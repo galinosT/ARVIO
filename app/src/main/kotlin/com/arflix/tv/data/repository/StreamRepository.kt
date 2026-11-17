@@ -49,6 +49,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.callbackFlow
@@ -2318,6 +2320,10 @@ class StreamRepository @Inject constructor(
             )
             emptyList()
         } catch (error: Exception) {
+            // Cancelled (the search was stopped, e.g. a prefetch superseded by Play): not an
+            // addon failure, and the empty list must not reach the cache.
+            if (error is CancellationException) throw error
+            currentCoroutineContext().ensureActive()
             Log.w(
                 TAG,
                 "[StreamFetch][Movie] failure addon=${addon.name} addonId=${addon.id} elapsedMs=${System.currentTimeMillis() - startedAt} error=${error.toShortLogMessage()}"
@@ -2503,6 +2509,8 @@ class StreamRepository @Inject constructor(
                         } catch (timeout: TimeoutCancellationException) {
                             throw timeout
                         } catch (error: Exception) {
+                            if (error is CancellationException) throw error
+                            currentCoroutineContext().ensureActive()
                             lastError = error
                             if (AddonRateLimitTracker.isRateLimitError(error)) {
                                 AddonRateLimitTracker.recordRateLimit(addon.id)
@@ -2634,6 +2642,8 @@ class StreamRepository @Inject constructor(
                             }
                         }
                     } catch (airDateError: Exception) {
+                        if (airDateError is CancellationException) throw airDateError
+                        currentCoroutineContext().ensureActive()
                         if (AddonRateLimitTracker.isRateLimitError(airDateError)) {
                             AddonRateLimitTracker.recordRateLimit(addon.id)
                         }
@@ -2673,6 +2683,8 @@ class StreamRepository @Inject constructor(
             )
             emptyList()
         } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            currentCoroutineContext().ensureActive()
             Log.w(
                 TAG,
                 "[StreamFetch][Episode] failure addon=${addon.name} addonId=${addon.id} elapsedMs=${System.currentTimeMillis() - startedAt} error=${error.toShortLogMessage()}"
@@ -2919,7 +2931,9 @@ class StreamRepository @Inject constructor(
                 if (completed == totalAddons) {
                     val createdAtMs = System.currentTimeMillis()
                     val finalResult = StreamResult(filtered, emptyList())
-                    if (!telegramIncomplete) {
+                    // A stopped search (cancelled prefetch) is not the answer: caching its empty
+                    // list made the next Play say "no sources" for the 15 s the empty entry lives.
+                    if (!telegramIncomplete && currentCoroutineContext().isActive) {
                         synchronized(streamResultCache) {
                             streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs, noticeSink.snapshot())
                         }
@@ -3621,7 +3635,9 @@ class StreamRepository @Inject constructor(
                 if (completed == totalAddons) {
                     val createdAtMs = System.currentTimeMillis()
                     val finalResult = StreamResult(filtered, emptyList())
-                    if (!telegramIncomplete) {
+                    // A stopped search (cancelled prefetch) is not the answer: caching its empty
+                    // list made the next Play say "no sources" for the 15 s the empty entry lives.
+                    if (!telegramIncomplete && currentCoroutineContext().isActive) {
                         synchronized(streamResultCache) {
                             streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs, noticeSink.snapshot())
                         }
