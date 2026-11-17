@@ -159,6 +159,10 @@
         b.title = "Σβήνει την παλιά σύνδεση Trakt του ARVIO από τον λογαριασμό (το Trakt κάθε κουτιού δεν επηρεάζεται)";
         b.onclick = async () => { b.disabled = true; try { show($("listMsg"), (await api("clear-trakt", { email: a.email })).message, true); } catch (e) { show($("listMsg"), e.message, false); } b.disabled = false; };
         tr.children[2].appendChild(b);
+        const t = document.createElement("button"); t.className = "ghost"; t.type = "button"; t.textContent = "Επιβολή cloud"; t.style.marginLeft = "6px";
+        t.title = "Οι ρυθμίσεις του cloud κερδίζουν στο επόμενο Sync κάθε κουτιού (π.χ. κουτί που στήθηκε μετά την αντιγραφή και κράτησε τις δικές του)";
+        t.onclick = async () => { t.disabled = true; try { show($("listMsg"), (await api("touch", { email: a.email })).message, true); } catch (e) { show($("listMsg"), e.message, false); } t.disabled = false; };
+        tr.children[2].appendChild(t);
         rows.appendChild(tr);
       }
       for (const sel of document.querySelectorAll(".accountSelect")) {

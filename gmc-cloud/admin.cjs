@@ -9,6 +9,10 @@
  *     Cloud account, replacing what is there. Field times are set to now so the devices take it.
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs copy-account <from-email> <to-email>
  *     copies every setting of one GMC Cloud account into another (sign-ins stay behind).
+ *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs inspect <email>
+ *     prints a summary of the account's saved settings (no secrets) for sync troubleshooting.
+ *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs touch <email>
+ *     makes the saved settings win on the account's boxes at their next sync (nothing else changes).
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs clear-trakt <email>
  *     removes the Trakt sign-in carried over from the ARVIO cloud (GMC keeps Trakt on each box).
  *
@@ -48,10 +52,14 @@ async function main() {
       console.log(await accounts.importArvio(email, arvioEmail, process.env.ARVIO_PASSWORD || ""));
     } else if (cmd === "copy-account" && email && arvioEmail) {
       console.log(await accounts.copyAccount(email, arvioEmail));
+    } else if (cmd === "touch" && email) {
+      console.log(await accounts.touch(email));
+    } else if (cmd === "inspect" && email) {
+      console.log(await accounts.inspect(email));
     } else if (cmd === "clear-trakt" && email) {
       console.log(await accounts.clearTrakt(email));
     } else {
-      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email] | copy-account <from> <to> | clear-trakt <email>");
+      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email] | copy-account <from> <to> | inspect <email> | touch <email> | clear-trakt <email>");
       process.exitCode = 2;
     }
   } finally {

@@ -334,6 +334,7 @@ const ADMIN_OPS = {
   passwd: async (b) => ({ message: await accountsApi().passwd(b.email, b.password) }),
   "import-arvio": async (b) => ({ message: await accountsApi().importArvio(b.email, b.arvioEmail, b.arvioPassword) }),
   "copy-account": async (b) => ({ message: await accountsApi().copyAccount(b.from, b.email) }),
+  touch: async (b) => ({ message: await accountsApi().touch(b.email) }),
   "clear-trakt": async (b) => ({ message: await accountsApi().clearTrakt(b.email) })
 };
 let accountsModule = null;

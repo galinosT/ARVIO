@@ -121,16 +121,28 @@ async function importArvio(email, arvioEmail, arvioPassword) {
   if (typeof payload === "string") payload = JSON.parse(payload);
   // Newer than anything the devices hold, so they take the imported values. The official
   // app's Trakt sign-in stays behind: GMC keeps Trakt on each box.
-  const now = Date.now();
-  if (payload.fieldUpdatedAt && typeof payload.fieldUpdatedAt === "object") {
-    for (const k of Object.keys(payload.fieldUpdatedAt)) payload.fieldUpdatedAt[k] = now;
-  }
-  if ("updatedAt" in payload) payload.updatedAt = now;
+  stampNow(payload);
   delete payload.traktTokens;
   payload.traktLinked = false;
   const { metrics } = await writeSnapshot(account, () => ({ payload }));
   const names = (payload.profiles || []).map((p) => p && p.name).filter(Boolean);
   return `Imported the ARVIO cloud settings of ${source} into ${normalize(email)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}`;
+}
+
+/**
+ * Marks every value of a snapshot as changed now, so the boxes take the cloud's values over their
+ * own: the per-field times, the add-on list time and each add-on change, and the subtitle time.
+ * A box set up after the settings were written otherwise keeps its fresh defaults.
+ */
+function stampNow(payload, now = Date.now()) {
+  if (payload.fieldUpdatedAt && typeof payload.fieldUpdatedAt === "object") {
+    for (const k of Object.keys(payload.fieldUpdatedAt)) payload.fieldUpdatedAt[k] = now;
+  }
+  for (const k of ["updatedAt", "addonsUpdatedAt", "subtitleSettingsUpdatedAt"]) if (k in payload) payload[k] = now;
+  if (payload.addonChanges && typeof payload.addonChanges === "object") {
+    for (const c of Object.values(payload.addonChanges)) if (c && typeof c === "object" && "updatedAt" in c) c.updatedAt = now;
+  }
+  return payload;
 }
 
 /** The account's saved settings (payload object), or null when it has none. */
@@ -157,17 +169,51 @@ async function copyAccount(fromEmail, toEmail) {
   const target = await loadAccount(toEmail);
   const payload = await readSnapshot(source);
   if (!payload) throw new Error(`No saved settings for ${normalize(fromEmail)}`);
-  const copy = JSON.parse(JSON.stringify(payload));
-  const now = Date.now();
-  if (copy.fieldUpdatedAt && typeof copy.fieldUpdatedAt === "object") {
-    for (const k of Object.keys(copy.fieldUpdatedAt)) copy.fieldUpdatedAt[k] = now;
-  }
-  if ("updatedAt" in copy) copy.updatedAt = now;
+  const copy = stampNow(JSON.parse(JSON.stringify(payload)));
   delete copy.traktTokens;
   copy.traktLinked = false;
   const { metrics } = await writeSnapshot(target, () => ({ payload: copy }));
   const names = (copy.profiles || []).map((p) => p && p.name).filter(Boolean);
   return `Copied the settings of ${normalize(fromEmail)} into ${normalize(toEmail)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}. Sign in to WeTrakr/Simkl/Trakt on the boxes.`;
+}
+
+/**
+ * A summary of an account's saved settings for troubleshooting sync, without secrets: profiles,
+ * the active profile, add-ons and catalogs per profile (names and counts only) and the times
+ * that decide which side wins a merge.
+ */
+async function inspect(email) {
+  const account = await loadAccount(email);
+  const p = await readSnapshot(account);
+  if (!p) return `No saved settings for ${normalize(email)}`;
+  const iso = (t) => (typeof t === "number" && t > 0 ? new Date(t).toISOString() : String(t ?? "-"));
+  const names = (list) => (Array.isArray(list) ? list.map((a) => a?.name || a?.manifest?.name || a?.id || "?") : []);
+  const out = [];
+  out.push(`account ${normalize(email)} · version ${p.version ?? "-"} · updatedAt ${iso(p.updatedAt)}`);
+  out.push(`activeProfileId ${p.activeProfileId ?? "-"}`);
+  for (const pr of p.profiles || []) out.push(`profile ${pr?.id} "${pr?.name ?? ""}"`);
+  out.push(`addonsUpdatedAt ${iso(p.addonsUpdatedAt)} · addonChanges ${Object.keys(p.addonChanges || {}).length}`);
+  out.push(`addons (root) ${names(p.addons).length}: ${names(p.addons).join(", ")}`);
+  for (const [id, list] of Object.entries(p.addonsByProfile || {})) out.push(`addonsByProfile[${id}] ${names(list).length}: ${names(list).join(", ")}`);
+  for (const [id, list] of Object.entries(p.catalogsByProfile || {})) out.push(`catalogsByProfile[${id}] ${Array.isArray(list) ? list.length : 0}`);
+  const f = p.fieldUpdatedAt || {};
+  const keys = Object.keys(f).sort();
+  out.push(`fieldUpdatedAt ${keys.length} keys`);
+  for (const k of keys) if (/addon|catalog|profile/i.test(k) || /^p:/.test(k) || /^c:/.test(k)) out.push(`  ${k} ${iso(f[k])}`);
+  return out.join("\n");
+}
+
+/**
+ * Makes the account's saved settings win on its boxes at their next sync, without changing them:
+ * for a box that was set up after the settings were written and kept its own defaults.
+ */
+async function touch(email) {
+  const account = await loadAccount(email);
+  await writeSnapshot(account, (current) => {
+    if (!current) throw new Error(`No saved settings for ${normalize(email)}`);
+    return { payload: stampNow(current) };
+  });
+  return `The saved settings of ${normalize(email)} now win on its boxes: run Sync now on each one.`;
 }
 
 async function clearTrakt(email) {
@@ -198,4 +244,4 @@ async function adminFromToken(token) {
   }
 }
 
-module.exports = { list, create, passwd, importArvio, copyAccount, clearTrakt, adminFromToken, normalize };
+module.exports = { list, create, passwd, importArvio, copyAccount, inspect, touch, clearTrakt, adminFromToken, normalize };
