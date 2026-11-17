@@ -133,6 +133,43 @@ async function importArvio(email, arvioEmail, arvioPassword) {
   return `Imported the ARVIO cloud settings of ${source} into ${normalize(email)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}`;
 }
 
+/** The account's saved settings (payload object), or null when it has none. */
+async function readSnapshot(account) {
+  const { backend } = deps();
+  const event = fakeEvent({});
+  event.headers.authorization = `Bearer ${(backend.signArvioAccessToken || backend._test.signArvioAccessToken)(account)}`;
+  const identity = await backend.resolveIdentity(event);
+  const { snapshot } = await backend.loadSnapshotForUpdate(event, identity);
+  let payload = snapshot?.payload;
+  if (typeof payload === "string") payload = JSON.parse(payload);
+  return payload || null;
+}
+
+/**
+ * Copies every setting of one GMC Cloud account into another, replacing what that one holds:
+ * profiles, add-ons, catalogs, subtitle/AI settings (keys included) and the GMC settings.
+ * Sign-ins stay behind: Trakt/Simkl/WeTrakr live on each box, and any Trakt tokens in the
+ * snapshot are dropped. Field times are set to now so the devices take the copied values.
+ */
+async function copyAccount(fromEmail, toEmail) {
+  if (normalize(fromEmail) === normalize(toEmail)) throw new Error("Pick two different accounts");
+  const source = await loadAccount(fromEmail);
+  const target = await loadAccount(toEmail);
+  const payload = await readSnapshot(source);
+  if (!payload) throw new Error(`No saved settings for ${normalize(fromEmail)}`);
+  const copy = JSON.parse(JSON.stringify(payload));
+  const now = Date.now();
+  if (copy.fieldUpdatedAt && typeof copy.fieldUpdatedAt === "object") {
+    for (const k of Object.keys(copy.fieldUpdatedAt)) copy.fieldUpdatedAt[k] = now;
+  }
+  if ("updatedAt" in copy) copy.updatedAt = now;
+  delete copy.traktTokens;
+  copy.traktLinked = false;
+  const { metrics } = await writeSnapshot(target, () => ({ payload: copy }));
+  const names = (copy.profiles || []).map((p) => p && p.name).filter(Boolean);
+  return `Copied the settings of ${normalize(fromEmail)} into ${normalize(toEmail)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}. Sign in to WeTrakr/Simkl/Trakt on the boxes.`;
+}
+
 async function clearTrakt(email) {
   const account = await loadAccount(email);
   const { result } = await writeSnapshot(account, (current) => {
@@ -161,4 +198,4 @@ async function adminFromToken(token) {
   }
 }
 
-module.exports = { list, create, passwd, importArvio, clearTrakt, adminFromToken, normalize };
+module.exports = { list, create, passwd, importArvio, copyAccount, clearTrakt, adminFromToken, normalize };

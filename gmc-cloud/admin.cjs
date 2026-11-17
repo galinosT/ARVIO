@@ -7,6 +7,8 @@
  *   docker compose exec -e ARVIO_PASSWORD=... gmc-cloud node gmc-cloud/admin.cjs import-arvio <email> [arvio-email]
  *     copies the ARVIO cloud snapshot of that ARVIO account (default: the same email) into the GMC
  *     Cloud account, replacing what is there. Field times are set to now so the devices take it.
+ *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs copy-account <from-email> <to-email>
+ *     copies every setting of one GMC Cloud account into another (sign-ins stay behind).
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs clear-trakt <email>
  *     removes the Trakt sign-in carried over from the ARVIO cloud (GMC keeps Trakt on each box).
  *
@@ -44,10 +46,12 @@ async function main() {
       console.log(await accounts.passwd(email, await askPassword(`New password for ${email}`)));
     } else if (cmd === "import-arvio" && email) {
       console.log(await accounts.importArvio(email, arvioEmail, process.env.ARVIO_PASSWORD || ""));
+    } else if (cmd === "copy-account" && email && arvioEmail) {
+      console.log(await accounts.copyAccount(email, arvioEmail));
     } else if (cmd === "clear-trakt" && email) {
       console.log(await accounts.clearTrakt(email));
     } else {
-      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email] | clear-trakt <email>");
+      console.log("Usage: admin.cjs list | create <email> | passwd <email> | import-arvio <email> [arvio-email] | copy-account <from> <to> | clear-trakt <email>");
       process.exitCode = 2;
     }
   } finally {

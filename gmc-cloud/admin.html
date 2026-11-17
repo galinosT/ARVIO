@@ -88,6 +88,19 @@
     </section>
 
     <section>
+      <h2>Αντιγραφή ρυθμίσεων</h2>
+      <p class="note">Αντιγράφει όλες τις ρυθμίσεις ενός λογαριασμού (προφίλ, addons, καταλόγους, υπότιτλους/AI με τα κλειδιά, ρυθμίσεις GMC) σε άλλον, και αντικαθιστά ό,τι έχει εκείνος. Οι συνδέσεις Trakt, Simkl και WeTrakr δεν αντιγράφονται: γίνονται σε κάθε κουτί.</p>
+      <form id="copyForm">
+        <div class="row">
+          <div><label for="cf">Από</label><select id="cf" class="accountSelect" required></select></div>
+          <div><label for="ct">Προς (αντικαθίσταται)</label><select id="ct" class="accountSelect" required></select></div>
+        </div>
+        <button type="submit">Αντιγραφή</button>
+        <div class="msg" id="copyMsg"></div>
+      </form>
+    </section>
+
+    <section>
       <h2>Μεταφορά από το cloud του ARVIO</h2>
       <p class="note">Φέρνει προφίλ, addons, καταλόγους και ρυθμίσεις από έναν λογαριασμό ARVIO και αντικαθιστά ό,τι έχει ο λογαριασμός GMC. Ο κωδικός ARVIO χρησιμοποιείται μία φορά και δεν αποθηκεύεται.</p>
       <form id="importForm">
@@ -195,6 +208,15 @@
     try { show($("importMsg"), (await api("import-arvio", { email: $("ie").value, arvioEmail: $("ia").value.trim(), arvioPassword: $("ip").value })).message, true); }
     catch (e) { show($("importMsg"), e.message, false); }
     $("ip").value = "";
+  };
+  $("copyForm").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const from = $("cf").value, to = $("ct").value;
+    if (from === to) { show($("copyMsg"), "Διάλεξε δύο διαφορετικούς λογαριασμούς", false); return; }
+    if (!confirm("Οι ρυθμίσεις του " + to + " θα αντικατασταθούν από αυτές του " + from + ". Συνέχεια;")) return;
+    show($("copyMsg"), "Αντιγραφή…", true);
+    try { show($("copyMsg"), (await api("copy-account", { from, email: to })).message, true); }
+    catch (e) { show($("copyMsg"), e.message, false); }
   };
   $("refresh").onclick = load;
   if (token) load();
