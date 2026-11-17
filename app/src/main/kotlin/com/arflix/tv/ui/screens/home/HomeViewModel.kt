@@ -151,6 +151,9 @@ data class HomeCollectionRow(
 // Quiet update notifications show their notice once per process, i.e. once per cold start.
 private var quietUpdateNoticeShown = false
 
+// GMC: a new version found at startup downloads by itself and opens the install prompt.
+private const val GMC_AUTO_UPDATE = true
+
 internal fun compactHomeCategoriesForCache(
     categories: List<Category>,
     maxItemsPerCategory: Int
@@ -2675,7 +2678,12 @@ class HomeViewModel @Inject constructor(
                 // small notice replaces the popup; the update stays available in Settings.
                 var quietNotice: String? = null
                 if (status is com.arflix.tv.updater.UpdateStatus.UpdateAvailable && previousStatus !is com.arflix.tv.updater.UpdateStatus.UpdateAvailable && !isIgnored) {
-                    if (updatePreferences.quietNotifications.first()) {
+                    if (GMC_AUTO_UPDATE) {
+                        // GMC: no popup to confirm first. The new version downloads in the
+                        // background and Android's own install prompt opens when it is ready:
+                        // a single "Install". A failed download falls back to the popup.
+                        downloadAppUpdate()
+                    } else if (updatePreferences.quietNotifications.first()) {
                         if (!quietUpdateNoticeShown) {
                             quietUpdateNoticeShown = true
                             quietNotice = context.getString(
@@ -2686,6 +2694,11 @@ class HomeViewModel @Inject constructor(
                     } else {
                         shouldAutoOpen = true
                     }
+                }
+                if (GMC_AUTO_UPDATE && status is com.arflix.tv.updater.UpdateStatus.Failure &&
+                    previousStatus is com.arflix.tv.updater.UpdateStatus.Downloading
+                ) {
+                    shouldAutoOpen = true
                 }
                 if (quietNotice != null) _quietUpdateNotice.value = quietNotice
 
@@ -5985,9 +5998,14 @@ class HomeViewModel @Inject constructor(
         com.arflix.tv.updater.ApkInstaller.launchInstall(context, apkFile)
         updateStatusManager.updateStatus(com.arflix.tv.updater.UpdateStatus.Installing(update))
 
-        // Mark this release as ignored so it doesn't pop up again if the user cancels the install
-        viewModelScope.launch {
-            updatePreferences.setIgnoredTag(update.tag)
+        // Mark this release as ignored so it doesn't pop up again if the user cancels the install.
+        // GMC: only until the app is restarted, so a cancelled install is offered again next time.
+        if (GMC_AUTO_UPDATE) {
+            updateStatusManager.sessionIgnoredTag = update.tag
+        } else {
+            viewModelScope.launch {
+                updatePreferences.setIgnoredTag(update.tag)
+            }
         }
     }
 
