@@ -169,12 +169,33 @@ async function copyAccount(fromEmail, toEmail) {
   const target = await loadAccount(toEmail);
   const payload = await readSnapshot(source);
   if (!payload) throw new Error(`No saved settings for ${normalize(fromEmail)}`);
-  const copy = stampNow(JSON.parse(JSON.stringify(payload)));
-  delete copy.traktTokens;
-  copy.traktLinked = false;
-  const { metrics } = await writeSnapshot(target, () => ({ payload: copy }));
-  const names = (copy.profiles || []).map((p) => p && p.name).filter(Boolean);
-  return `Copied the settings of ${normalize(fromEmail)} into ${normalize(toEmail)}: ${metrics.profileCount ?? names.length} profile(s)${names.length ? ` (${names.join(", ")})` : ""}. Sign in to WeTrakr/Simkl/Trakt on the boxes.`;
+  let mapped = null;
+  const { metrics } = await writeSnapshot(target, (current) => {
+    // The target keeps its own profile (id, name, avatar): the source's active profile's settings
+    // are written under it. Otherwise a box already signed in to the target, whose profile is not in
+    // the copied list, keeps its own defaults and wins over the copy.
+    const sourceProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+    const sourceId = payload.activeProfileId || sourceProfiles[0]?.id;
+    const targetProfiles = Array.isArray(current?.profiles) ? current.profiles : [];
+    const targetProfile = targetProfiles.find((pr) => pr?.id === current?.activeProfileId) || targetProfiles[0];
+    let text = JSON.stringify(payload);
+    if (sourceId && targetProfile?.id && targetProfile.id !== sourceId) {
+      text = text.split(sourceId).join(targetProfile.id);
+      mapped = targetProfile;
+    }
+    const copy = stampNow(JSON.parse(text));
+    if (mapped) {
+      const own = (copy.profiles || []).find((pr) => pr?.id === mapped.id) || { id: mapped.id };
+      const avatarKeys = Object.keys(mapped).filter((k) => /avatar/i.test(k));
+      copy.profiles = [{ ...own, name: mapped.name, ...Object.fromEntries(avatarKeys.map((k) => [k, mapped[k]])) }];
+      copy.activeProfileId = mapped.id;
+    }
+    delete copy.traktTokens;
+    copy.traktLinked = false;
+    return { payload: copy };
+  });
+  const into = mapped ? ` (into its profile "${mapped.name}")` : "";
+  return `Copied the settings of ${normalize(fromEmail)} into ${normalize(toEmail)}${into}: ${metrics.profileCount ?? 1} profile(s). Run Sync now on its boxes; sign in to WeTrakr/Simkl/Trakt there.`;
 }
 
 /**
