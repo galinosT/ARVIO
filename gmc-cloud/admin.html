@@ -114,7 +114,8 @@
   async function api(op, body) {
     const res = await fetch("/admin/api/" + op, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      // Not "Authorization": the browser uses that header for Caddy's basic_auth on /admin.
+      headers: { "content-type": "application/json", "x-gmc-token": token },
       body: JSON.stringify(body || {})
     });
     const json = await res.json().catch(() => ({}));

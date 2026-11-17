@@ -374,7 +374,8 @@ async function handleAdmin(req, res, url) {
   if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
   const ip = clientIp(req, lowerHeaders(req.headers));
   if (adminBlocked(ip)) return sendJson(res, 429, { error: "Too many attempts; try again later" });
-  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  // The GMC token rides its own header: Authorization carries Caddy's basic_auth on /admin.
+  const token = String(req.headers["x-gmc-token"] || "").trim();
   const admin = await accountsApi().adminFromToken(token);
   if (!admin) {
     adminFailed(ip);
