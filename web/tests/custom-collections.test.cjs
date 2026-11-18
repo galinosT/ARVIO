@@ -92,3 +92,15 @@ test('production loaders send discover filters, list IDs and addon genre to the 
   assert.equal(directed.items.length, 1);
   assert.equal(directed.items[0].title, 'Directed show');
 });
+
+test('a folder added to the pack later is placed in the pack order, not at the end', async () => {
+  const doc = (ids) => JSON.stringify([{ id: 'p', title: 'Platforms', folders: ids.map((id) => ({ id, title: id.toUpperCase(),
+    sources: [{ provider: 'tmdb', tmdbSourceType: 'NETWORK', tmdbId: 1, mediaType: 'TV' }] })) }]);
+  const url = 'https://example.com/p.json';
+  const before = await parseCustomCollections(doc(['a', 'c']), url);
+  const after = await parseCustomCollections(doc(['a', 'b', 'c']), url);
+  const current = [before[0], { id: 'other', name: 'Other' }, ...before.slice(1).map((c) => c.name === 'C' ? { ...c, enabled: false } : c)];
+  const merged = mergeImportedCollections(current, after);
+  assert.equal(merged.map((c) => c.name).join(','), 'Platforms,Other,A,B,C');
+  assert.equal(merged.find((c) => c.name === 'C').enabled, false);
+});

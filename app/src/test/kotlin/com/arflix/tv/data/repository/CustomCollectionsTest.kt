@@ -102,9 +102,25 @@ class CustomCollectionsTest {
         val other = CatalogConfig(id = "other", title = "Other", sourceType = CatalogSourceType.ADDON)
         val current = listOf(other) + imported.reversed().map { it.copy(title = "Renamed ${it.id}") }
         val merged = CustomCollections.merge(current, imported)
-        assertEquals(current, merged)
-        assertEquals(current, CustomCollections.merge(merged, imported))
+        assertEquals(current.size, merged.size)
+        assertEquals(current.associate { it.id to it.title }, merged.associate { it.id to it.title })
+        // Rails keep the user's order; folders follow the pack's order.
+        assertEquals(current.filter { it.kind == CatalogKind.COLLECTION_RAIL }.map { it.id },
+            merged.filter { it.kind == CatalogKind.COLLECTION_RAIL }.map { it.id })
+        assertEquals(imported.filter { it.kind == CatalogKind.COLLECTION }.map { it.id },
+            merged.filter { it.kind == CatalogKind.COLLECTION }.map { it.id })
+        assertEquals(merged, CustomCollections.merge(merged, imported))
         assertEquals(listOf(other), merged.filterNot { it.packId == imported.first().packId })
+    }
+
+    @Test
+    fun `a folder added to the pack later is placed in the pack order`() {
+        val all = CustomCollections.catalogs(CustomCollections.parse(nuvioExport, "https://x/p.json").getOrThrow())
+        val newcomer = all.first { it.kind == CatalogKind.COLLECTION }
+        val current = all.filterNot { it.id == newcomer.id }
+        val merged = CustomCollections.merge(current, all)
+        assertEquals(all.filter { it.kind == CatalogKind.COLLECTION }.map { it.id },
+            merged.filter { it.kind == CatalogKind.COLLECTION }.map { it.id })
     }
 
     @Test

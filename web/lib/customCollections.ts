@@ -96,12 +96,28 @@ export async function parseCustomCollections(json: string, url?: string): Promis
 export function mergeImportedCollections(current: CatalogConfig[], imported: CatalogConfig[]): CatalogConfig[] {
   const packId = imported[0]?.packId;
   if (!packId) return current;
-  const pending = new Map(imported.map(c => [c.id, c]));
+  // Rails keep their place among the user's rows. Folders follow the pack's own order, so a folder
+  // added to the pack later shows up where the pack puts it, not after the rail's last folder.
+  // Names and hidden state stay as the user set them.
+  const isFolder = (c: CatalogConfig) => String(c.kind).toUpperCase() === "COLLECTION";
+  const existing = new Map(current.filter(c => c.packId === packId).map(c => [c.id, c]));
+  const keep = (c: CatalogConfig) => {
+    const old = existing.get(c.id);
+    return old ? { ...c, name: old.name, title: old.title, enabled: old.enabled } : c;
+  };
+  const pending = new Map(imported.filter(c => !isFolder(c)).map(c => [c.id, c]));
+  const folders = imported.filter(isFolder).map(keep);
+  let foldersPlaced = false;
   const next = current.flatMap(c => {
     if (c.packId !== packId) return [c];
+    if (isFolder(c)) {
+      if (foldersPlaced) return [];
+      foldersPlaced = true;
+      return folders;
+    }
     const replacement = pending.get(c.id);
     pending.delete(c.id);
-    return replacement ? [{ ...replacement, name: c.name, title: c.title, enabled: c.enabled }] : [];
+    return replacement ? [keep(replacement)] : [];
   });
-  return [...next, ...pending.values()];
+  return [...next, ...pending.values(), ...(foldersPlaced ? [] : folders)];
 }

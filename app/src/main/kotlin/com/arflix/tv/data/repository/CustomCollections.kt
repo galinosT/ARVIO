@@ -88,12 +88,21 @@ internal object CustomCollections {
 
     fun merge(current: List<CatalogConfig>, imported: List<CatalogConfig>): List<CatalogConfig> {
         val packId = imported.firstOrNull()?.packId ?: return current
-        val pending = imported.associateByTo(LinkedHashMap()) { it.id }
-        val kept = current.mapNotNull { existing ->
-            if (existing.packId != packId) existing
-            else pending.remove(existing.id)?.copy(title = existing.title)
+        // Rails keep their place among the user's rows; folders follow the pack's own order, so a
+        // folder added to the pack later shows up where the pack puts it. Titles stay the user's.
+        val existing = current.filter { it.packId == packId }.associateBy { it.id }
+        fun keep(c: CatalogConfig) = existing[c.id]?.let { c.copy(title = it.title) } ?: c
+        val pending = imported.filter { it.kind != CatalogKind.COLLECTION }.associateByTo(LinkedHashMap()) { it.id }
+        val folders = imported.filter { it.kind == CatalogKind.COLLECTION }.map(::keep)
+        var foldersPlaced = false
+        val kept = current.flatMap { c ->
+            when {
+                c.packId != packId -> listOf(c)
+                c.kind == CatalogKind.COLLECTION -> if (foldersPlaced) emptyList() else { foldersPlaced = true; folders }
+                else -> listOfNotNull(pending.remove(c.id)?.let(::keep))
+            }
         }
-        return kept + pending.values
+        return kept + pending.values + (if (foldersPlaced) emptyList() else folders)
     }
 
     // ── Parsing ─────────────────────────────────────────────────────────
