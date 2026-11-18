@@ -1,0 +1,62 @@
+# Moves galinos to a tested upstream sync branch (made by "Upstream sync"). The push to galinos
+# starts "Personal build", which releases the normal GMC: the boxes then see the update.
+# Closes the sync's Issue and deletes the branch. Needs the SYNC_TOKEN secret, like the sync.
+name: Promote upstream sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Sync branch to promote, e.g. sync/v2.3.2 or sync/main-20261122"
+        required: true
+        type: string
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    if: github.repository_owner != 'ProdigyV21'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      BRANCH: ${{ inputs.branch }}
+    steps:
+      - name: Check input
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Add the repository secret SYNC_TOKEN."; exit 1; }
+          case "$BRANCH" in sync/*) ;; *) echo "::error::Only sync/* branches can be promoted."; exit 1 ;; esac
+
+      - uses: actions/checkout@v5
+        with:
+          ref: galinos
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Move galinos to the sync branch
+        run: |
+          git config user.name "GMC upstream sync"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch --quiet origin "$BRANCH"
+          # Fast-forward when galinos has not moved since the sync; otherwise merge the sync in
+          # (galinos got its own commits meanwhile). A conflict here stops without changing anything.
+          if ! git merge --ff-only "origin/$BRANCH"; then
+            git merge --no-ff --no-edit -m "Promote $BRANCH" "origin/$BRANCH" || {
+              git merge --abort
+              echo "::error::galinos and $BRANCH conflict; ask Claude to merge them."
+              exit 1
+            }
+          fi
+          git push --quiet origin HEAD:galinos
+          git push --quiet origin --delete "$BRANCH"
+
+      - name: Close the sync Issue
+        run: |
+          label="${BRANCH#sync/}"
+          for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"Upstream sync $label\"" --json number --jq '.[].number'); do
+            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "Promoted: galinos now includes ARVIO $label, and the normal GMC is being built."
+          done

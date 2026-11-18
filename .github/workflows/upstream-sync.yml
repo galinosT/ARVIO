@@ -1,0 +1,252 @@
+# Keeps GMC up to date with the official ARVIO (ProdigyV21/ARVIO).
+#
+# Every day it checks ARVIO for something new to take:
+#   - a new release tag: taken as soon as it appears;
+#   - otherwise, on Sundays, ARVIO's main branch, if it has moved since the last sync.
+# It merges that into a branch of its own (sync/<what>), never straight into galinos, then runs
+# the app, dashboard and backend tests and builds a GMC Test pre-release from it. An Issue tells
+# you what happened. "Promote upstream sync" then moves galinos to that branch, which builds the
+# normal GMC. Nothing reaches the GMC boxes before you promote.
+#
+# On a merge conflict or a failing test it stops, leaves galinos alone and opens an Issue with
+# what went wrong; resolving it is a manual step (ask Claude with the Issue link).
+#
+# Needs the repository secret SYNC_TOKEN: a fine-grained personal access token for this repository
+# with Contents, Workflows, Issues and Actions set to "Read and write". The built-in token cannot
+# push commits that touch .github/workflows, and ARVIO's history does.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # 05:17 Athens time in winter
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "What to take from ARVIO"
+        type: choice
+        options: [auto, main, latest-tag]
+        default: auto
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM: https://github.com/ProdigyV21/ARVIO.git
+  BASE: galinos
+
+jobs:
+  merge:
+    if: github.repository_owner != 'ProdigyV21'
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.merge.outputs.branch }}
+      label: ${{ steps.pick.outputs.label }}
+      server: ${{ steps.merge.outputs.server }}
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+    steps:
+      - name: Check the sync token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the repository secret SYNC_TOKEN (see the comment at the top of upstream-sync.yml)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BASE }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Fetch ARVIO
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch --quiet --tags upstream main
+
+      - name: Pick what to take
+        id: pick
+        env:
+          SOURCE: ${{ inputs.source || 'auto' }}
+        run: |
+          # Newest release tag that galinos does not contain yet.
+          tag="$(git tag --list 'v*' --sort=-v:refname | while read -r t; do
+            git merge-base --is-ancestor "$t" HEAD || { echo "$t"; break; }; done)"
+          main_new=false
+          git merge-base --is-ancestor upstream/main HEAD || main_new=true
+          target=""; label=""
+          if [ "$SOURCE" != main ] && [ -n "$tag" ]; then
+            target="$tag"; label="$tag"
+          elif [ "$main_new" = true ] && { [ "$SOURCE" = main ] || { [ "$SOURCE" = auto ] && [ "$(date -u +%u)" = 7 ]; }; }; then
+            target="upstream/main"; label="main-$(date -u +%Y%m%d)"
+          fi
+          if [ -z "$target" ]; then
+            echo "Nothing new to take (tag: ${tag:-none}, main moved: $main_new, source: $SOURCE)."
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this one is already waiting
+        id: dup
+        if: steps.pick.outputs.target != ''
+        env:
+          LABEL: ${{ steps.pick.outputs.label }}
+        run: |
+          if git ls-remote --exit-code --heads origin "sync/$LABEL" >/dev/null; then
+            echo "sync/$LABEL already exists: it is waiting for promotion or for a fix."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge into a sync branch
+        id: merge
+        if: steps.pick.outputs.target != '' && steps.dup.outputs.skip != 'true'
+        env:
+          TARGET: ${{ steps.pick.outputs.target }}
+          LABEL: ${{ steps.pick.outputs.label }}
+        run: |
+          git config user.name "GMC upstream sync"
+          git config user.email "actions@users.noreply.github.com"
+          branch="sync/$LABEL"
+          git switch -c "$branch"
+          range="$(git merge-base HEAD "$TARGET")..$TARGET"
+          {
+            echo "### What ARVIO changed ($(git rev-list --count "$range") commits)"
+            git log --no-merges --format='- %s (%h)' "$range" | head -60
+          } > "$RUNNER_TEMP/changes.md"
+          if ! git merge --no-ff --no-edit -m "Merge ARVIO $LABEL into GMC" "$TARGET"; then
+            {
+              echo "The merge of ARVIO **$LABEL** into \`$BASE\` has conflicts, so nothing was changed."
+              echo
+              echo "### Files in conflict"
+              git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/'
+              echo
+              echo "To fix: ask Claude to resolve this Issue (it needs the link). Then run *Upstream sync* again."
+              echo
+              cat "$RUNNER_TEMP/changes.md"
+            } > "$RUNNER_TEMP/issue.md"
+            git merge --abort
+            title="Upstream sync $LABEL: merge conflict"
+            # One Issue per conflict: the daily run does not open it again while it is open.
+            if [ -n "$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+              echo "::notice::Still waiting for the open Issue \"$title\" to be resolved."
+              exit 0
+            fi
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+            echo "::error::Merge conflict, see the Issue."
+            exit 1
+          fi
+          # Backend or dashboard changes need a manual redeploy on the VPS after promotion.
+          server="$(git diff --name-only "$BASE" HEAD -- netlify-auth-site gmc-cloud web | cut -d/ -f1 | sort -u | tr '\n' ' ')"
+          git push --quiet origin "$branch"
+          cp "$RUNNER_TEMP/changes.md" changes.md
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the change list
+        if: steps.merge.outputs.branch != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: changes
+          path: changes.md
+          retention-days: 30
+
+  android-tests:
+    needs: merge
+    if: needs.merge.outputs.branch != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.merge.outputs.branch }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - run: cp secrets.defaults.properties secrets.properties
+      - name: Compile and test the app
+        run: ./gradlew testSideloadDebugUnitTest --no-daemon -PpartnerManagement=true
+
+  node-tests:
+    needs: merge
+    if: needs.merge.outputs.branch != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [web, netlify-auth-site]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.merge.outputs.branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci --ignore-scripts
+      - if: matrix.directory == 'netlify-auth-site'
+        run: npm ci --ignore-scripts --prefix ../web
+      - run: npm test
+      - if: matrix.directory == 'web'
+        run: npx tsc --noEmit
+      - if: matrix.directory == 'netlify-auth-site'
+        name: GMC Cloud server parses
+        run: for f in ../gmc-cloud/*.cjs; do node --check "$f"; done
+
+  report:
+    needs: [merge, android-tests, node-tests]
+    if: always() && needs.merge.outputs.branch != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      BRANCH: ${{ needs.merge.outputs.branch }}
+      LABEL: ${{ needs.merge.outputs.label }}
+      SERVER: ${{ needs.merge.outputs.server }}
+      PASSED: ${{ needs.android-tests.result == 'success' && needs.node-tests.result == 'success' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: changes
+      - name: Build GMC Test and report
+        run: |
+          if [ "$PASSED" = true ]; then
+            # A GMC Test pre-release from the sync branch; the normal GMC is untouched.
+            gh workflow run personal-build.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" -f cloud_test=true
+            {
+              echo "ARVIO **$LABEL** merged cleanly into \`$BRANCH\` and all tests passed."
+              echo "A **GMC Test** pre-release is being built from it (Actions → Personal build)."
+              echo
+              echo "**Next:** try it in GMC Test. When happy, run **Actions → Promote upstream sync** with branch \`$BRANCH\`."
+              echo "That updates \`galinos\` and builds the normal GMC, which reaches the boxes as an update."
+              if [ -n "$SERVER" ]; then
+                echo
+                echo "⚠️ This also changes the server side (\`$SERVER\`). After promoting, redeploy on the VPS (ask Claude for the Claude Code steps)."
+              fi
+              echo
+              cat changes.md
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL: ready to try" --body-file issue.md
+          else
+            {
+              echo "ARVIO **$LABEL** merged without conflicts into \`$BRANCH\`, but tests failed, so no build was made and \`galinos\` is unchanged."
+              echo
+              echo "Run with the failures: $RUN_URL"
+              echo
+              echo "To fix: ask Claude to look at this Issue. The branch \`$BRANCH\` stays for the fix; delete it to have the sync try again from scratch."
+              echo
+              cat changes.md
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL: tests failed" --body-file issue.md
+            exit 1
+          fi
