@@ -5,8 +5,10 @@
 #   - otherwise, on Sundays, ARVIO's main branch, if it has moved since the last sync.
 # It merges that into a branch of its own (sync/<what>), never straight into galinos, then runs
 # the app, dashboard and backend tests and builds a GMC Test pre-release from it. An Issue tells
-# you what happened. "Promote upstream sync" then moves galinos to that branch, which builds the
-# normal GMC. Nothing reaches the GMC boxes before you promote.
+# you what happened, and whether it is an official ARVIO release or the weekly sync. The rule:
+# weekly syncs are for GMC Test only; promote to the normal GMC when ARVIO makes an official
+# release. "Promote upstream sync" moves galinos to the branch, which builds the normal GMC.
+# Nothing reaches the GMC boxes before you promote. A new sync branch replaces older ones.
 #
 # On a merge conflict or a failing test it stops, leaves galinos alone and opens an Issue with
 # what went wrong; resolving it is a manual step (ask Claude with the Issue link).
@@ -45,6 +47,7 @@ jobs:
     outputs:
       branch: ${{ steps.merge.outputs.branch }}
       label: ${{ steps.pick.outputs.label }}
+      kind: ${{ steps.pick.outputs.kind }}
       server: ${{ steps.merge.outputs.server }}
     env:
       GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
@@ -77,17 +80,18 @@ jobs:
             git merge-base --is-ancestor "$t" HEAD || { echo "$t"; break; }; done)"
           main_new=false
           git merge-base --is-ancestor upstream/main HEAD || main_new=true
-          target=""; label=""
+          target=""; label=""; kind=""
           if [ "$SOURCE" != main ] && [ -n "$tag" ]; then
-            target="$tag"; label="$tag"
+            target="$tag"; label="$tag"; kind=official
           elif [ "$main_new" = true ] && { [ "$SOURCE" = main ] || { [ "$SOURCE" = auto ] && [ "$(date -u +%u)" = 7 ]; }; }; then
-            target="upstream/main"; label="main-$(date -u +%Y%m%d)"
+            target="upstream/main"; label="main-$(date -u +%Y%m%d)"; kind=weekly
           fi
           if [ -z "$target" ]; then
             echo "Nothing new to take (tag: ${tag:-none}, main moved: $main_new, source: $SOURCE)."
           fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
           echo "label=$label" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
       - name: Skip if this one is already waiting
         id: dup
@@ -141,6 +145,14 @@ jobs:
           # Backend or dashboard changes need a manual redeploy on the VPS after promotion.
           server="$(git diff --name-only "$BASE" HEAD -- netlify-auth-site gmc-cloud web | cut -d/ -f1 | sort -u | tr '\n' ' ')"
           git push --quiet origin "$branch"
+          # A newer sync replaces the older ones that were never promoted: it contains them.
+          for old in $(git ls-remote --heads origin 'sync/*' | awk '{print $2}' | sed 's#refs/heads/##'); do
+            [ "$old" = "$branch" ] && continue
+            git push --quiet origin --delete "$old" || true
+            for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"Upstream sync ${old#sync/}\"" --json number --jq '.[].number'); do
+              gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "Replaced by $branch, which includes these changes."
+            done
+          done
           cp "$RUNNER_TEMP/changes.md" changes.md
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "server=$server" >> "$GITHUB_OUTPUT"
@@ -211,6 +223,7 @@ jobs:
       GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
       BRANCH: ${{ needs.merge.outputs.branch }}
       LABEL: ${{ needs.merge.outputs.label }}
+      KIND: ${{ needs.merge.outputs.kind }}
       SERVER: ${{ needs.merge.outputs.server }}
       PASSED: ${{ needs.android-tests.result == 'success' && needs.node-tests.result == 'success' }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -220,6 +233,13 @@ jobs:
           name: changes
       - name: Build GMC Test and report
         run: |
+          if [ "$KIND" = official ]; then
+            what="official ARVIO release"
+            advice="This is an **official ARVIO release**: once GMC Test looks good, promote it to the normal GMC."
+          else
+            what="weekly, not an official release"
+            advice="This is the **weekly** sync of ARVIO's main branch, **not an official release**: try it in GMC Test, but keep the normal GMC for official releases (the next one will include these changes)."
+          fi
           if [ "$PASSED" = true ]; then
             # A GMC Test pre-release from the sync branch; the normal GMC is untouched.
             gh workflow run personal-build.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" -f cloud_test=true
@@ -227,7 +247,9 @@ jobs:
               echo "ARVIO **$LABEL** merged cleanly into \`$BRANCH\` and all tests passed."
               echo "A **GMC Test** pre-release is being built from it (Actions → Personal build)."
               echo
-              echo "**Next:** try it in GMC Test. When happy, run **Actions → Promote upstream sync** with branch \`$BRANCH\`."
+              echo "$advice"
+              echo
+              echo "**To promote:** run **Actions → Promote upstream sync** with branch \`$BRANCH\`."
               echo "That updates \`galinos\` and builds the normal GMC, which reaches the boxes as an update."
               if [ -n "$SERVER" ]; then
                 echo
@@ -236,7 +258,7 @@ jobs:
               echo
               cat changes.md
             } > issue.md
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL: ready to try" --body-file issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL ($what): ready to try" --body-file issue.md
           else
             {
               echo "ARVIO **$LABEL** merged without conflicts into \`$BRANCH\`, but tests failed, so no build was made and \`galinos\` is unchanged."
@@ -247,6 +269,6 @@ jobs:
               echo
               cat changes.md
             } > issue.md
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL: tests failed" --body-file issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync $LABEL ($what): tests failed" --body-file issue.md
             exit 1
           fi
