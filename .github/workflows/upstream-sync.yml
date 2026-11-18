@@ -68,21 +68,23 @@ jobs:
       - name: Fetch ARVIO
         run: |
           git remote add upstream "$UPSTREAM"
-          git fetch --quiet --tags upstream main
+          # ARVIO's tags go to their own namespace: GMC's release tags (v2.4.45, v2.4.45-test …)
+          # live in this repository and could share a name with a future ARVIO tag.
+          git fetch --quiet --no-tags upstream main '+refs/tags/*:refs/upstream-tags/*'
 
       - name: Pick what to take
         id: pick
         env:
           SOURCE: ${{ inputs.source || 'auto' }}
         run: |
-          # Newest release tag that galinos does not contain yet.
-          tag="$(git tag --list 'v*' --sort=-v:refname | while read -r t; do
-            git merge-base --is-ancestor "$t" HEAD || { echo "$t"; break; }; done)"
+          # ARVIO's newest release tag, if galinos does not contain it yet.
+          tag="$(git for-each-ref --sort=-v:refname --format='%(refname:lstrip=2)' 'refs/upstream-tags/v*' | head -1)"
+          if [ -n "$tag" ] && git merge-base --is-ancestor "refs/upstream-tags/$tag" HEAD; then tag=""; fi
           main_new=false
           git merge-base --is-ancestor upstream/main HEAD || main_new=true
           target=""; label=""; kind=""
           if [ "$SOURCE" != main ] && [ -n "$tag" ]; then
-            target="$tag"; label="$tag"; kind=official
+            target="refs/upstream-tags/$tag"; label="$tag"; kind=official
           elif [ "$main_new" = true ] && { [ "$SOURCE" = main ] || { [ "$SOURCE" = auto ] && [ "$(date -u +%u)" = 7 ]; }; }; then
             target="upstream/main"; label="main-$(date -u +%Y%m%d)"; kind=weekly
           fi
