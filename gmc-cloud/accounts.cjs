@@ -150,6 +150,29 @@ function stampNow(payload, now = Date.now()) {
   return payload;
 }
 
+/** Tracker sign-ins kept per profile in mdbListSyncByProfile, with the time each was last set. */
+const TRACKER_CREDENTIALS = [
+  { at: "simklCredentialUpdatedAt", fields: ["simklAccessToken"] },
+  { at: "mdbListCredentialUpdatedAt", fields: ["mdbListApiKey", "mdbListAccessToken", "mdbListRefreshToken", "mdbListTokenExpiresAt"] },
+];
+
+/**
+ * Removes every Simkl/MDBList sign-in from a snapshot's profiles, marked as changed now so the
+ * boxes drop theirs too at their next sync. Returns how many sign-ins were removed.
+ */
+function stripTrackerSignIns(payload, now = Date.now()) {
+  let removed = 0;
+  for (const sel of Object.values(payload?.mdbListSyncByProfile || {})) {
+    if (!sel || typeof sel !== "object") continue;
+    for (const { at, fields } of TRACKER_CREDENTIALS) {
+      if (fields.some((f) => sel[f] != null && sel[f] !== "")) removed++;
+      for (const f of fields) delete sel[f];
+      sel[at] = now;
+    }
+  }
+  return removed;
+}
+
 /** Personal data that belongs to a person, not to a setup: it stays with the target account. */
 const PERSONAL_KEYS = ["watchlistByProfile", "watchlistChangesByProfile", "traktTokens", "traktExpiration"];
 
@@ -183,6 +206,18 @@ function copyPayload(source, current) {
     else delete copy[k];
   }
   copy.traktLinked = !!current?.traktLinked;
+  // Tracker sign-ins (Simkl, MDBList) belong to the person: the source's are dropped (marked now,
+  // so the target's boxes drop any they got), and the target keeps its own where it had one.
+  stripTrackerSignIns(copy);
+  for (const [pid, sel] of Object.entries(copy.mdbListSyncByProfile || {})) {
+    const own = current?.mdbListSyncByProfile?.[pid];
+    if (!own || !sel) continue;
+    for (const { at, fields } of TRACKER_CREDENTIALS) {
+      if (!fields.some((f) => own[f] != null && own[f] !== "")) continue;
+      for (const f of fields) if (f in own) sel[f] = own[f];
+      sel[at] = own[at] ?? sel[at];
+    }
+  }
   return { copy, mapped: mapped && mapped.id !== sourceId ? mapped : (mapped || null) };
 }
 
@@ -263,12 +298,16 @@ async function clearTrakt(email) {
   const account = await loadAccount(email);
   const { result } = await writeSnapshot(account, (current) => {
     if (!current) throw new Error(`No saved settings for ${normalize(email)}`);
-    const had = Boolean(current.traktTokens && Object.keys(current.traktTokens).length);
+    const trakt = Boolean(current.traktTokens && Object.keys(current.traktTokens).length);
     delete current.traktTokens;
     current.traktLinked = false;
-    return { payload: current, result: had };
+    const others = stripTrackerSignIns(current);
+    return { payload: current, result: { trakt, others } };
   });
-  return result ? `Removed the Trakt sign-in stored for ${normalize(email)}` : `No Trakt sign-in was stored for ${normalize(email)}`;
+  const parts = [result.trakt && "Trakt", result.others && `${result.others} Simkl/MDBList`].filter(Boolean);
+  return parts.length
+    ? `Removed the sign-ins stored for ${normalize(email)}: ${parts.join(", ")}. Its boxes drop them at their next sync; WeTrakr is not affected.`
+    : `No Trakt, Simkl or MDBList sign-in was stored for ${normalize(email)}`;
 }
 
 /** The signed-in user of a GMC access token, when it is an administrator (GMC_ADMIN_EMAILS). */
@@ -287,4 +326,4 @@ async function adminFromToken(token) {
   }
 }
 
-module.exports = { copyPayload, stampNow, list, create, passwd, importArvio, copyAccount, inspect, touch, clearTrakt, adminFromToken, normalize };
+module.exports = { copyPayload, stampNow, stripTrackerSignIns, list, create, passwd, importArvio, copyAccount, inspect, touch, clearTrakt, adminFromToken, normalize };

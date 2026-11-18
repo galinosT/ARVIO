@@ -14,7 +14,7 @@
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs touch <email>
  *     makes the saved settings win on the account's boxes at their next sync (nothing else changes).
  *   docker compose exec gmc-cloud node gmc-cloud/admin.cjs clear-trakt <email>
- *     removes the Trakt sign-in carried over from the ARVIO cloud (GMC keeps Trakt on each box).
+ *     removes the Trakt, Simkl and MDBList sign-ins stored in the account (its boxes drop them at their next sync).
  *
  * Public signup is closed on GMC Cloud; this is the only way an account is created.
  * Passwords are read from the terminal (or GMC_ADMIN_PASSWORD) and never printed.

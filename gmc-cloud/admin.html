@@ -155,8 +155,8 @@
         tr.innerHTML = "<td></td><td></td><td></td>";
         tr.children[0].textContent = a.email;
         tr.children[1].textContent = created;
-        const b = document.createElement("button"); b.className = "ghost"; b.type = "button"; b.textContent = "Καθάρισμα Trakt";
-        b.title = "Σβήνει την παλιά σύνδεση Trakt του ARVIO από τον λογαριασμό (το Trakt κάθε κουτιού δεν επηρεάζεται)";
+        const b = document.createElement("button"); b.className = "ghost"; b.type = "button"; b.textContent = "Καθάρισμα συνδέσεων";
+        b.title = "Σβήνει τις συνδέσεις Trakt, Simkl και MDBList που είναι αποθηκευμένες στον λογαριασμό· τα κουτιά του τις αφαιρούν στο επόμενο sync (το WeTrakr δεν επηρεάζεται)";
         b.onclick = async () => { b.disabled = true; try { show($("listMsg"), (await api("clear-trakt", { email: a.email })).message, true); } catch (e) { show($("listMsg"), e.message, false); } b.disabled = false; };
         tr.children[2].appendChild(b);
         const t = document.createElement("button"); t.className = "ghost"; t.type = "button"; t.textContent = "Επιβολή cloud"; t.style.marginLeft = "6px";
