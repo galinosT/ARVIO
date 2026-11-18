@@ -27,6 +27,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import com.arflix.tv.ui.theme.appBackgroundDark
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +35,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -42,6 +44,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -102,6 +106,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.sp
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyListState
@@ -109,6 +115,7 @@ import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import com.arflix.tv.data.model.IptvVodSourceIds
+import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.data.repository.isAddonNoticeRow
 import com.arflix.tv.data.model.RecentPlayedSource
 import com.arflix.tv.data.model.findRecentSourceMatch
@@ -129,6 +136,13 @@ import com.arflix.tv.R
 import java.util.Locale
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.arflix.tv.data.repository.effectiveSettingsDataStore
+import com.arflix.tv.util.addonStreamDetailsKey
+import com.arflix.tv.util.profilesDataStore
 
 // OLED source picker colors. Keep these deliberately monochrome so the sheet
 // feels like the rest of ARVIO instead of a separate dashboard.
@@ -291,6 +305,7 @@ fun StreamSelector(
     onClose: () -> Unit = {}
 ) {
     val isMobile = LocalDeviceType.current.isTouchDevice()
+    val showAddonStreamDetails = if (isMobile) false else rememberAddonStreamDetails()
     val isRtlLayoutDirection = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
     val haptic = LocalHapticFeedback.current
 
@@ -548,9 +563,16 @@ fun StreamSelector(
         focusedStreamIndex = index
     }
     val edgePadding = with(density) { 22.dp.roundToPx() }
+    val focusedRowSize by remember(focusedIndex, showAddonStreamDetails) {
+        derivedStateOf {
+            if (showAddonStreamDetails) listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == focusedIndex }?.size else null
+        }
+    }
 
     // Keep D-pad movement calm: only scroll when focus moves past the visible buffer.
-    LaunchedEffect(isVisible, focusedIndex, streamKeys, selectedTabIndex) {
+    // Expanded descriptions are measured a frame after focus moves; recheck their new bounds.
+    LaunchedEffect(isVisible, focusedIndex, streamKeys, selectedTabIndex, showAddonStreamDetails, focusZone, focusedRowSize) {
         if (isVisible && !isMobile) {
             listState.scrollToKeepFocusVisible(focusedIndex, flatStreams.size, edgePadding)
         }
@@ -741,6 +763,7 @@ fun StreamSelector(
         ) {
             if (!isMobile) {
                 OledSourceSelectorTv(
+                    showAddonStreamDetails = showAddonStreamDetails,
                     title = title,
                     subtitle = subtitle,
                     streams = streams,
@@ -789,7 +812,10 @@ fun StreamSelector(
 
                 Column(
                     modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .widthIn(max = 840.dp)
                         .fillMaxSize()
+                        .safeDrawingPadding()
                         .padding(horizontal = 16.dp)
                 ) {
                     // Header row: title, count, close button
@@ -979,6 +1005,7 @@ fun StreamSelector(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun OledSourceSelectorTv(
+    showAddonStreamDetails: Boolean,
     title: String,
     subtitle: String,
     streams: List<StreamSource>,
@@ -1138,7 +1165,8 @@ private fun OledSourceSelectorTv(
                     hasStreamingAddons = hasStreamingAddons,
                     message = stringResource(R.string.stream_no_sources_match)
                 )
-                else -> Box(modifier = Modifier.fillMaxSize()) {
+                else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val rowViewportHeight = (maxHeight - 44.dp).coerceAtLeast(0.dp)
                     TvLazyColumn(
                         state = listState,
                         contentPadding = PaddingValues(bottom = 10.dp),
@@ -1151,6 +1179,8 @@ private fun OledSourceSelectorTv(
                             item(key = streamKeys[index]) {
                                 OledSourceRow(
                                     presentation = presentation,
+                                    showAddonStreamDetails = showAddonStreamDetails,
+                                    rowViewportHeight = rowViewportHeight,
                                     isFocused = streamsFocused && index == focusedIndex,
                                     isSelected = isSelectedSource(presentation.stream, selectedStream),
                                     isRecent = presentation.stream === recentStream,
@@ -1314,7 +1344,10 @@ private object StreamRegexes {
  *  keep their arrival order instead of re-sorting. Mirror of PlayerViewModel.keepsOwnStreamOrder. */
 private fun keepsOwnStreamOrder(stream: StreamSource): Boolean =
     stream.addonName.contains("aiostream", ignoreCase = true) ||
-        stream.addonId.contains("aiostream", ignoreCase = true)
+        stream.addonId.contains("aiostream", ignoreCase = true) ||
+        // YouTube videos come in YouTube's relevance order and have no resolution or size, so
+        // re-sorting them would sort by title alone (A-Z) and bury the best match.
+        stream.addonId == YouTubeCollection.ADDON_ID
 
 internal fun sourceTabId(stream: StreamSource): String {
     val baseName = stream.addonName.split(" - ").firstOrNull()?.trim() ?: stream.addonName
@@ -2206,11 +2239,18 @@ private fun SourceEmptyState(
 @Composable
 private fun OledSourceRow(
     presentation: SourcePresentation,
+    showAddonStreamDetails: Boolean,
+    rowViewportHeight: Dp,
     isFocused: Boolean,
     isSelected: Boolean,
     isRecent: Boolean,
     onClick: () -> Unit
 ) {
+    var headerHeight by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val expandedLines = with(density) {
+        addonDescriptionMaxLines(rowViewportHeight.toPx() - headerHeight - 34.dp.toPx(), 16.sp.toPx())
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2238,7 +2278,7 @@ private fun OledSourceRow(
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-            Column {
+            Column(Modifier.onSizeChanged { headerHeight = it.height }) {
                 if (isRecent) {
                     RecentlyPlayedChip(inverted = isFocused)
                     Spacer(modifier = Modifier.height(5.dp))
@@ -2290,7 +2330,39 @@ private fun OledSourceRow(
                 Spacer(Modifier.height(8.dp))
                 OledBadgeFlow(presentation, Int.MAX_VALUE, inverted = isFocused)
             }
+        val description = remember(presentation.stream.description, showAddonStreamDetails) {
+            tvAddonStreamDescription(presentation.stream.description, showAddonStreamDetails)
+        }
+        if (description != null && expandedLines > 0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = description,
+                style = ArflixTypography.body.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary,
+                maxLines = if (isFocused) expandedLines else minOf(3, expandedLines),
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
+}
+
+internal fun addonDescriptionMaxLines(availableHeight: Float, lineHeight: Float): Int =
+    (availableHeight / lineHeight).toInt().coerceIn(0, 12)
+
+internal fun tvAddonStreamDescription(raw: String?, enabled: Boolean): String? =
+    if (enabled) raw?.trim()?.takeIf { it.isNotBlank() }?.let(::withEmojiPresentation) else null
+
+@Composable
+private fun rememberAddonStreamDetails(): Boolean {
+    val context = LocalContext.current
+    val enabledFlow = remember(context) {
+        combine(context.profilesDataStore.data, context.effectiveSettingsDataStore.data) { profiles, settings ->
+            val profileId = profiles[stringPreferencesKey("active_profile_id")].orEmpty().ifBlank { "default" }
+            settings[addonStreamDetailsKey(profileId)] ?: false
+        }.distinctUntilChanged()
+    }
+    val enabled by enabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    return enabled
 }
 
 /** Inverted (white) so it reads at a glance against the monochrome rows. */
@@ -2510,7 +2582,7 @@ private fun MobileStreamCard(
             ) {
                 Text(
                     text = withEmojiPresentation(presentation.rawTitle),
-                    style = ArflixTypography.body.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                    style = ArflixTypography.body.copy(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
                     color = TextPrimary,
                     modifier = Modifier.weight(1f)
                 )
@@ -2519,7 +2591,7 @@ private fun MobileStreamCard(
             Spacer(modifier = Modifier.height(5.dp))
             Text(
                 text = rowSubtitle(presentation),
-                style = ArflixTypography.caption.copy(fontSize = 10.sp),
+                style = ArflixTypography.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
                 color = OledMutedText,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis

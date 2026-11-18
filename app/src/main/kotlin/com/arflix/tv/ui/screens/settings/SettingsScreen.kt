@@ -6,6 +6,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.arflix.tv.data.model.AnimeStructuringStyle
 
 import androidx.activity.compose.BackHandler
+import com.arflix.tv.server.PhoneInputServer
 import com.arflix.tv.ui.components.LocalBottomBarInset
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -17,6 +18,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.animation.AnimatedVisibility
@@ -46,6 +48,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.arflix.tv.BuildConfig
+import com.arflix.tv.ui.components.PhoneInputButton
+import com.arflix.tv.ui.components.PhoneInputOnDemand
+import com.arflix.tv.ui.components.PhoneInputPanel
 import com.arflix.tv.util.Constants
 import androidx.compose.foundation.background
 import androidx.compose.ui.input.pointer.pointerInput
@@ -183,6 +188,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -340,8 +346,9 @@ internal fun tvGeneralRowsForSection(section: String): List<Int> {
             (if (BuildConfig.AUDIO_SYNC_AVAILABLE) listOf(48) else emptyList()) +
             listOf(39, 9, 45)
         "ai_subtitles" -> listOf(28, 29, 30, 31, 32, 33) + LIVE_AI_SUBS_ROWS + GMC_CLAUDE_ROWS
-        "playback" -> listOf(10, 11, 12, 43, 44, 13, 14, 34, 37, 16, 15, 40, 27, 53, 54)
-        "appearance" -> listOf(17, 49) + GMC_HOME_ROWS + listOf(50, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47)
+        "playback" -> listOf(10, 11, 12, 43, 44, 55, 13, 14, 34, 37, 16, 15, 40, 27, 53, 54)
+        "appearance" -> listOf(17, 49) + GMC_HOME_ROWS + listOf(50, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47, 56, 57) +
+            (if (com.arflix.tv.ui.components.KidsNavigation.hideLiveTv) emptyList() else listOf(58))
         "profiles" -> listOf(19)
         "network" -> listOf(25, 26, 35)
         else -> emptyList()
@@ -612,13 +619,16 @@ fun SettingsScreen(
     var isSidebarFocused by remember { mutableStateOf(arrivesAtTopLevel) }
     val hasProfile = currentProfile != null
     val maxSidebarIndex = topBarMaxIndex(hasProfile)
-    var sidebarFocusIndex by remember { mutableIntStateOf(if (hasProfile) 5 else 4) } // SETTINGS
+    var sidebarFocusIndex by remember { mutableIntStateOf(com.arflix.tv.ui.components.topBarSelectedIndex(SidebarItem.SETTINGS, hasProfile)) }
+    com.arflix.tv.ui.components.ReconcileTopBarFocus(sidebarFocusIndex, hasProfile) { sidebarFocusIndex = it }
     var sectionIndex by remember { mutableIntStateOf(initialSectionIdx ?: 0) }
-    var mobilePage by remember {
+    var mobilePage by remember(initialSection) {
         mutableStateOf(
             when (initialSection) {
                 "iptv" -> "TV"
                 "stremio" -> "Addons"
+                "home_server" -> "Home Server"
+                "catalogs" -> "Catalogs"
                 else -> "MAIN"
             }
         )
@@ -919,7 +929,6 @@ fun SettingsScreen(
     // TV reveals measured rows; touch uses native bring-into-view. A new
     // subpage gets its own tracker even if its first focused index is unchanged.
     LaunchedEffect(
-        contentFocusIndex,
         focusTracker,
         sectionIndex,
         activeZone,
@@ -929,44 +938,43 @@ fun SettingsScreen(
         if (activeZone != Zone.CONTENT) return@LaunchedEffect
         if (!isTouchDevice && sections[sectionIndex] == "catalogs") return@LaunchedEffect
 
-        if (!isTouchDevice) {
-            // Let newly selected sections attach; never retain detached coordinates.
-            androidx.compose.runtime.withFrameNanos { }
-            focusTracker.revealDelta(contentFocusIndex)?.let { delta ->
-                val target = (scrollState.value + delta).toInt().coerceIn(0, scrollState.maxValue)
-                if (target != scrollState.value) scrollState.animateScrollTo(target, tween(100, easing = FastOutSlowInEasing))
-                return@LaunchedEffect
+        // Observe focus outside composition. Restarting the whole SettingsScreen for
+        // every row move recreates unrelated panels and their callbacks on the UI thread.
+        snapshotFlow { contentFocusIndex }.collectLatest { focusedIndex ->
+            if (!isTouchDevice) {
+                // Let newly selected sections attach; never retain detached coordinates.
+                androidx.compose.runtime.withFrameNanos { }
+                focusTracker.revealDelta(focusedIndex)?.let { delta ->
+                    val target = (scrollState.value + delta).toInt().coerceIn(0, scrollState.maxValue)
+                    if (target != scrollState.value) scrollState.animateScrollTo(target, tween(100, easing = FastOutSlowInEasing))
+                    return@collectLatest
+                }
             }
-        }
 
-        val requester = focusTracker.requesters[contentFocusIndex]
-        if (requester != null && isTouchDevice) {
-            // Native branch — handles all geometry correctly.
-            runCatching { requester.bringIntoView() }
-            return@LaunchedEffect
-        }
+            val requester = focusTracker.requesters[focusedIndex]
+            if (requester != null && isTouchDevice) {
+                runCatching { requester.bringIntoView() }
+                return@collectLatest
+            }
 
-        // Fallback: legacy ratio heuristic, only when positions are unknown
-        // and scrolling is actually possible.
-        val maxScroll = scrollState.maxValue
-        val currentScroll = scrollState.value
-        if (maxScroll <= 0) return@LaunchedEffect
-        val currentSection = sections.getOrNull(sectionIndex).orEmpty()
-        val maxIndex = sectionMaxIndex(currentSection).coerceAtLeast(1)
-        val clampedFocus = contentFocusIndex.coerceIn(0, maxIndex)
-        val ratio = clampedFocus.toFloat() / maxIndex.toFloat()
-        val targetScroll = (maxScroll * ratio).toInt().coerceIn(0, maxScroll)
-        if (abs(currentScroll - targetScroll) > 24) {
-            if (isTouchDevice) {
-                scrollState.animateScrollTo(targetScroll)
-            } else {
-                // Settings uses a single, manually managed focus target on TV.
-                // A short animation keeps larger row jumps readable without
-                // building a long animation queue behind the remote input.
-                scrollState.animateScrollTo(
-                    targetScroll,
-                    animationSpec = tween(100, easing = FastOutSlowInEasing)
-                )
+            // Fall back to the ratio only while measured positions are unknown.
+            val maxScroll = scrollState.maxValue
+            val currentScroll = scrollState.value
+            if (maxScroll <= 0) return@collectLatest
+            val currentSection = sections.getOrNull(sectionIndex).orEmpty()
+            val maxIndex = sectionMaxIndex(currentSection).coerceAtLeast(1)
+            val clampedFocus = focusedIndex.coerceIn(0, maxIndex)
+            val ratio = clampedFocus.toFloat() / maxIndex.toFloat()
+            val targetScroll = (maxScroll * ratio).toInt().coerceIn(0, maxScroll)
+            if (abs(currentScroll - targetScroll) > 24) {
+                if (isTouchDevice) {
+                    scrollState.animateScrollTo(targetScroll)
+                } else {
+                    scrollState.animateScrollTo(
+                        targetScroll,
+                        animationSpec = tween(100, easing = FastOutSlowInEasing)
+                    )
+                }
             }
         }
     }
@@ -1000,6 +1008,8 @@ fun SettingsScreen(
     fun openCatalogEditor(catalog: CatalogConfig) {
         if (uiState.isKidsProfile && com.arflix.tv.data.repository.KidsTrustedTitles.isTrustedSource(catalog)) {
             kidsCatalogOptions = catalog
+        } else if (uiState.isKidsProfile && com.arflix.tv.data.repository.KidsTrustedCatalogs.isApprovable(catalog)) {
+            viewModel.openKidsCatalogApproval(catalog)
         } else {
             renameCatalogId = catalog.id
             renameCatalogTitle = catalog.title
@@ -1025,6 +1035,7 @@ fun SettingsScreen(
         showCatalogRename ||
         kidsCatalogOptions != null ||
         uiState.kidsListApproval != null ||
+        uiState.kidsCatalogApproval != null ||
         youTubeManagerCatalogId != null ||
         showYouTubeAddInput ||
         uiState.pendingYouTubeUrl != null ||
@@ -1518,6 +1529,12 @@ fun SettingsScreen(
                                                 50 -> viewModel.setWatchlistOnHome(!uiState.watchlistOnHome)
                                                 53 -> viewModel.cyclePlaybackCacheSize()
                                                 54 -> viewModel.clearPlaybackCache()
+                                                55 -> viewModel.setShowAddonStreamDetails(!uiState.showAddonStreamDetails)
+                                                in 56..58 -> {
+                                                    val section = com.arflix.tv.util.OPTIONAL_NAVIGATION_SECTIONS[
+                                                        tvGeneralRowsForSection(currentSection)[contentFocusIndex] - 56]
+                                                    viewModel.setNavigationSectionVisible(section, section in uiState.hiddenNavigationSections)
+                                                }
                                             }
                                         }
                                         "iptv" -> {
@@ -2207,7 +2224,11 @@ fun SettingsScreen(
                             playbackCacheUsedBytes = uiState.playbackCacheUsedBytes,
                             playbackCacheMaxBytes = uiState.playbackCacheMaxBytes,
                             onPlaybackCacheSizeClick = { viewModel.cyclePlaybackCacheSize() },
-                            onClearPlaybackCacheClick = { viewModel.clearPlaybackCache() }
+                            onClearPlaybackCacheClick = { viewModel.clearPlaybackCache() },
+                            showAddonStreamDetails = uiState.showAddonStreamDetails,
+                            onShowAddonStreamDetailsToggle = { viewModel.setShowAddonStreamDetails(it) },
+                            hiddenNavigationSections = uiState.hiddenNavigationSections,
+                            onNavigationSectionVisibleChange = viewModel::setNavigationSectionVisible
                         )
                         if (showAiModelDialog) {
                             AiModelDialog(
@@ -2577,6 +2598,7 @@ fun SettingsScreen(
         if (showCustomAddonInput) {
             InputModal(
                 title = stringResource(R.string.add_addon),
+                phoneInput = true,
                 fields = listOf(
                     InputField(label = stringResource(R.string.settings_label_url), value = customAddonUrl, onValueChange = { customAddonUrl = it })
                 ),
@@ -2597,6 +2619,7 @@ fun SettingsScreen(
         if (showHomeServerInput) {
             InputModal(
                 title = stringResource(R.string.settings_home_server),
+                phoneInput = true,
                 supportingText = stringResource(R.string.settings_home_server_https_note) + "\n\n" + stringResource(R.string.homeserver_silo_help),
                 fields = listOf(
                     InputField(
@@ -2968,6 +2991,32 @@ fun SettingsScreen(
                 },
                 onDismiss = { kidsCatalogOptions = null }
             )
+        }
+
+        uiState.kidsCatalogApproval?.let { approval ->
+            if (approval.needsPin) {
+                androidx.compose.runtime.key(approval.pinAttempts) {
+                    com.arflix.tv.ui.screens.profile.PinEntryDialog(
+                        title = stringResource(R.string.profile_parent_pin_enter),
+                        onPinConfirmed = viewModel::confirmKidsCatalogPin,
+                        onDismiss = viewModel::dismissKidsCatalogApproval,
+                        pinError = approval.error?.localizedText().orEmpty()
+                    )
+                }
+            } else {
+                KidsCatalogOptionsDialog(
+                    title = approval.catalog.title,
+                    approved = approval.approved,
+                    onRename = {
+                        viewModel.dismissKidsCatalogApproval()
+                        renameCatalogId = approval.catalog.id
+                        renameCatalogTitle = approval.catalog.title
+                        showCatalogRename = true
+                    },
+                    onToggleApproval = viewModel::requestKidsCatalogPin,
+                    onDismiss = viewModel::dismissKidsCatalogApproval
+                )
+            }
         }
 
         uiState.kidsListApproval?.let { approval ->
@@ -4489,13 +4538,12 @@ private fun MdbListConnectDialog(
                     style = ArflixTypography.caption,
                     color = TextSecondary
                 )
-                // GMC: or type it on the phone.
+                // On a TV, on demand: or paste the key on the phone.
                 Spacer(modifier = Modifier.height(12.dp))
-                com.arflix.tv.ui.components.GmcPhoneQr(
-                    title = "MDBList API key",
-                    fields = listOf(com.arflix.tv.server.GmcPhoneServer.Field("MDBList API key", apiKey, secret = true)),
-                    onValues = { values -> values.firstOrNull()?.takeIf { it.isNotEmpty() }?.let { apiKey = it } },
-                    qrSize = 96.dp,
+                PhoneInputOnDemand(
+                    title = stringResource(R.string.mdblist_connect_title),
+                    fields = listOf(PhoneInputServer.Field(stringResource(R.string.mdblist_key_hint), apiKey, secret = true)),
+                    onValues = { values -> values.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { apiKey = it } },
                 )
             }
         },
@@ -4829,12 +4877,13 @@ private fun MobileSettingsLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = stringResource(R.string.settings),
-                    style = ArflixTypography.heroTitle.copy(fontSize = 28.sp),
+                    style = ArflixTypography.heroTitle.copy(fontSize = 24.sp),
                     color = TextPrimary,
                     modifier = Modifier.weight(1f)
                 )
@@ -4915,18 +4964,15 @@ private fun MobileSettingsLayout(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .padding(horizontal = 24.dp),
+                        .padding(start = 8.dp, end = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
+                    androidx.compose.material3.IconButton(onClick = { onNavigate(backTarget) }, modifier = Modifier.size(48.dp)) { Icon(
                         imageVector = Icons.Default.ArrowBack,
                         contentDescription = stringResource(R.string.back),
                         tint = TextPrimary,
-                        modifier = Modifier
-                            .clickable { onNavigate(backTarget) }
-                            .padding(end = 16.dp)
-                            .size(24.dp)
-                    )
+                        modifier = Modifier.size(24.dp)
+                    ) }
                     Text(
                         text = mobileCategoryTitle(displayedSubPage),
                         style = ArflixTypography.heroTitle.copy(fontSize = 20.sp),
@@ -5019,12 +5065,12 @@ private fun MobileSettingsMainPage(
     androidx.compose.foundation.lazy.LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            start = 24.dp,
-            end = 24.dp,
+            start = 16.dp,
+            end = 16.dp,
             top = 8.dp,
             bottom = 16.dp + LocalBottomBarInset.current
         ),
-        verticalArrangement = Arrangement.spacedBy(32.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
             MobileSettingsCategory(title = stringResource(R.string.settings_section_languages)) {
@@ -5085,7 +5131,8 @@ private fun MobileSettingsMainPage(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onNavigate(name) }
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                                .heightIn(min = 52.dp)
+                                .padding(horizontal = 4.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(imageVector = icon, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(24.dp))
@@ -5308,8 +5355,8 @@ private fun MobileSettingsSubPage(
             .fillMaxSize()
             .verticalScroll(scrollState)
             .padding(
-                start = 24.dp,
-                end = 24.dp,
+                start = 16.dp,
+                end = 16.dp,
                 top = 8.dp,
                 bottom = 16.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             ),
@@ -5591,6 +5638,7 @@ private fun MobileSettingsSubPage(
                         value = when (uiState.subtitleAiModel) {
                             com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> "Groq - GPT-OSS 120B"
                             com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> "Google - Gemini 3.5 Flash Lite"
+                            com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> "Anthropic - Claude Haiku 5.5"
                         },
                         isFocused = false,
                         onClick = onSubtitleAiModelClick
@@ -5639,6 +5687,8 @@ private fun MobileSettingsSubPage(
                                     stringResource(R.string.ai_groq_disclaimer)
                                 com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 ->
                                     stringResource(R.string.ai_gemini_disclaimer)
+                                com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU ->
+                                    stringResource(R.string.ai_claude_disclaimer)
                             },
                             style = ArflixTypography.caption.copy(fontSize = 11.sp),
                             color = TextSecondary.copy(alpha = 0.5f),
@@ -5649,6 +5699,7 @@ private fun MobileSettingsSubPage(
             }
             "Appearance" -> {
                 MobileSettingsCategory(title = stringResource(R.string.settings_section_appearance)) {
+                    com.arflix.tv.ui.components.MobileHomeHeroStyleSetting()
                     MobileSettingsRow(
                         icon = Icons.Default.Bookmark,
                         title = stringResource(R.string.watchlist_on_home),
@@ -5747,6 +5798,26 @@ private fun MobileSettingsSubPage(
                         showDivider = false,
                         onClick = { viewModel.setSmoothScrolling(!uiState.smoothScrolling) }
                     )
+                }
+                MobileSettingsCategory(title = stringResource(R.string.navigation_sections)) {
+                    com.arflix.tv.util.OPTIONAL_NAVIGATION_SECTIONS
+                        .filter { it != "tv" || !uiState.isKidsProfile }
+                        .forEach { section ->
+                            val visible = section !in uiState.hiddenNavigationSections
+                            MobileSettingsRow(
+                                icon = when (section) {
+                                    "search" -> Icons.Default.Search
+                                    "watchlist" -> Icons.Default.Bookmark
+                                    else -> Icons.Default.LiveTv
+                                },
+                                title = navigationVisibilityTitle(section),
+                                subtitle = stringResource(R.string.settings_profile_scoped),
+                                value = stringResource(if (visible) R.string.on else R.string.off),
+                                toggleChecked = visible,
+                                isFocused = false,
+                                onClick = { viewModel.setNavigationSectionVisible(section, !visible) }
+                            )
+                        }
                 }
             }
             "Addons" -> {
@@ -6830,6 +6901,13 @@ private fun formatCompactCount(value: Int): String {
 }
 
 @Composable
+private fun navigationVisibilityTitle(section: String): String = stringResource(when (section) {
+    "search" -> R.string.navigation_show_search
+    "watchlist" -> R.string.navigation_show_library
+    else -> R.string.navigation_show_tv
+})
+
+@Composable
 private fun TvGeneralSettingsRows(
     section: String,
     defaultSubtitle: String,
@@ -6939,12 +7017,25 @@ private fun TvGeneralSettingsRows(
     playbackCacheUsedBytes: Long = 0L,
     playbackCacheMaxBytes: Long = 0L,
     onPlaybackCacheSizeClick: () -> Unit = {},
-    onClearPlaybackCacheClick: () -> Unit = {}
+    onClearPlaybackCacheClick: () -> Unit = {},
+    showAddonStreamDetails: Boolean = false,
+    onShowAddonStreamDetailsToggle: (Boolean) -> Unit = {},
+    hiddenNavigationSections: Set<String> = emptySet(),
+    onNavigationSectionVisibleChange: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     Column {
         tvGeneralRowsForSection(section).forEachIndexed { localIndex, rowId ->
             if (localIndex > 0) Spacer(modifier = Modifier.height(10.dp))
             when (rowId) {
+                in 56..58 -> {
+                    val section = com.arflix.tv.util.OPTIONAL_NAVIGATION_SECTIONS[rowId - 56]
+                    SettingsToggleRow(navigationVisibilityTitle(section), stringResource(R.string.settings_profile_scoped),
+                        section !in hiddenNavigationSections, focusedIndex == localIndex,
+                        { onNavigationSectionVisibleChange(section, it) }, Modifier.settingsFocusSlot(localIndex))
+                }
+                55 -> SettingsToggleRow(stringResource(R.string.show_addon_stream_details),
+                    stringResource(R.string.show_addon_stream_details_desc), showAddonStreamDetails,
+                    focusedIndex == localIndex, onShowAddonStreamDetailsToggle, Modifier.settingsFocusSlot(localIndex))
                 0 -> SettingsRow(
                     icon = Icons.Default.Language,
                     title = stringResource(R.string.app_language),
@@ -7064,6 +7155,7 @@ private fun TvGeneralSettingsRows(
                     value = when (subtitleAiModel) {
                         com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> "Groq - GPT-OSS 120B"
                         com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> "Google - Gemini 3.5 Flash Lite"
+                        com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> "Anthropic - Claude Haiku 5.5"
                     },
                     isFocused = focusedIndex == localIndex,
                     onClick = onSubtitleAiModelClick,
@@ -7589,6 +7681,7 @@ private fun GeneralSettings(
             value = when (subtitleAiModel) {
                 com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> "Groq – GPT-OSS 120B"
                 com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> "Google – Gemini 3.5 Flash Lite"
+                com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> "Anthropic – Claude Haiku 5.5"
             },
             isFocused = focusedIndex == 29,
             onClick = onSubtitleAiModelClick,
@@ -7640,6 +7733,8 @@ private fun GeneralSettings(
                         stringResource(R.string.ai_groq_disclaimer)
                     com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 ->
                         stringResource(R.string.ai_gemini_disclaimer)
+                    com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU ->
+                        stringResource(R.string.ai_claude_disclaimer)
                 },
                 style = ArflixTypography.caption.copy(fontSize = 11.sp),
                 color = TextSecondary.copy(alpha = 0.4f),
@@ -7652,10 +7747,12 @@ private fun GeneralSettings(
 private fun maskAiApiKey(key: String, notSetLabel: String = "Not set"): String {
     val trimmed = key.trim()
     if (trimmed.isBlank()) return notSetLabel
-    val provider = when {
-        trimmed.startsWith("gsk_") -> "Groq · "
-        trimmed.startsWith("AIzaSy") -> "Gemini · "
-        else -> ""
+    // Same prefix rules as the model switch, so the label and the model can't disagree.
+    val provider = when (com.arflix.tv.ui.screens.player.subtitles.subtitleAiModelForKey(trimmed)) {
+        com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> "Groq · "
+        com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> "Gemini · "
+        com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> "Claude · "
+        null -> ""
     }
     val masked = if (trimmed.length <= 4) "••••" else "••••${trimmed.takeLast(4)}"
     return "$provider$masked"
@@ -7670,7 +7767,8 @@ private fun AiModelDialog(
     val isMobile = LocalDeviceType.current.isTouchDevice()
     val options = listOf(
         Triple(com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B, "Groq – GPT-OSS 120B", stringResource(R.string.ai_groq_model_note)),
-        Triple(com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25, "Google – Gemini 3.5 Flash Lite", stringResource(R.string.ai_gemini_model_note))
+        Triple(com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25, "Google – Gemini 3.5 Flash Lite", stringResource(R.string.ai_gemini_model_note)),
+        Triple(com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU, "Anthropic – Claude Haiku 5.5", stringResource(R.string.ai_claude_model_note))
     )
     BackHandler { onDismiss() }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -7750,6 +7848,7 @@ private fun AiApiKeyDialog(
     val placeholder = when (model) {
         com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> "gsk_..."
         com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> "AIzaSy..."
+        com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> "sk-ant-..."
     }
     BackHandler { onDismiss() }
     LaunchedEffect(Unit) {
@@ -7770,7 +7869,13 @@ private fun AiApiKeyDialog(
                 Text(text = stringResource(R.string.ai_api_key_title), style = ArflixTypography.sectionTitle, color = TextPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(if (model == com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B) R.string.ai_api_key_dialog_subtitle_groq else R.string.ai_api_key_dialog_subtitle_gemini),
+                    text = stringResource(
+                        when (model) {
+                            com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GROQ_LLAMA_70B -> R.string.ai_api_key_dialog_subtitle_groq
+                            com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25 -> R.string.ai_api_key_dialog_subtitle_gemini
+                            com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.CLAUDE_HAIKU -> R.string.ai_api_key_dialog_subtitle_claude
+                        }
+                    ),
                     style = ArflixTypography.caption,
                     color = TextSecondary
                 )
@@ -10052,6 +10157,7 @@ private fun StremioAddonsSettings(
                         val canDelete = addon.isRemovable
                         val settingsUrl = addon.settingsPageUrl
                         val needsSetup = addon.needsConfiguration && !addon.isEnabled
+                        Column {
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable { onToggleAddon(addon.id) }.padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -10059,12 +10165,12 @@ private fun StremioAddonsSettings(
                             AddonLogo(addon = addon, size = 32.dp, fallbackTint = TextSecondary)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(addon.name, style = ArflixTypography.cardTitle.copy(fontSize = 16.sp), color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(addon.name, style = ArflixTypography.cardTitle.copy(fontSize = 16.sp), color = TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 if (needsSetup) {
                                     Spacer(modifier = Modifier.height(4.dp))
                                     AddonSetupRequiredChip()
                                 } else {
-                                    Text(addon.description, style = ArflixTypography.caption.copy(fontSize = 13.sp), color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(addon.description, style = ArflixTypography.caption.copy(fontSize = 13.sp), color = TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                             Spacer(modifier = Modifier.width(12.dp))
@@ -10080,18 +10186,21 @@ private fun StremioAddonsSettings(
                                     Box(modifier = Modifier.size(18.dp).background(color = Color.White, shape = RoundedCornerShape(12.dp)))
                                 }
                             }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(start = 56.dp, end = 8.dp), horizontalArrangement = Arrangement.End) {
                             if (settingsUrl != null && !needsSetup) {
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Box(modifier = Modifier.size(32.dp).clickable { openExternalUrl(context, settingsUrl) }.background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                                Box(modifier = Modifier.size(48.dp).clickable { openExternalUrl(context, settingsUrl) }, contentAlignment = Alignment.Center) {
                                     Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_addon_configure), tint = TextSecondary, modifier = Modifier.size(18.dp))
                                 }
                             }
                             if (canDelete) {
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Box(modifier = Modifier.size(32.dp).clickable { onDeleteAddon(addon.id) }.background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                                Box(modifier = Modifier.size(48.dp).clickable { onDeleteAddon(addon.id) }, contentAlignment = Alignment.Center) {
                                     Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.settings_cd_delete_addon), tint = TextSecondary, modifier = Modifier.size(18.dp))
                                 }
                             }
+                        }
                         }
                         if (index < addons.size - 1) {
                             Box(modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp).background(Color.White.copy(alpha = 0.05f)))
@@ -11903,10 +12012,20 @@ private fun InputModal(
     supportingText: String? = null,
     fields: List<InputField>,
     toggleFields: List<ToggleField> = emptyList(),
+    // On a TV: a "Use your phone" button beside Paste reveals a QR code to fill the fields from the phone.
+    phoneInput: Boolean = false,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    if (LocalDeviceType.current.isTouchDevice()) {
+        MobileConnectionForm(title, supportingText, fields, toggleFields, onConfirm, onDismiss)
+        return
+    }
     var focusedIndex by remember(title, fields.size) { mutableIntStateOf(0) }
+    // The paste row holds "Use your phone" on its right; Left/Right move between the two.
+    val phoneEnabled = phoneInput && fields.isNotEmpty()
+    var phoneSlotFocused by remember(title) { mutableStateOf(false) }
+    var phoneRevealed by remember(title) { mutableStateOf(false) }
     var lastFocusedFieldIndex by remember(title, fields.size) { mutableStateOf<Int?>(null) }
     val totalItems = fields.size + toggleFields.size + 3 // inputs + toggles + paste + cancel + confirm
     val isTouchDevice = LocalDeviceType.current.isTouchDevice()
@@ -12039,6 +12158,7 @@ private fun InputModal(
                                     true
                                 }
                                 Key.DirectionUp -> {
+                                    phoneSlotFocused = false
                                     if (focusedIndex > 0) {
                                         if (focusedIndex < fields.size) hideKeyboardAll()
                                         focusedIndex--
@@ -12046,6 +12166,7 @@ private fun InputModal(
                                     true
                                 }
                                 Key.DirectionDown -> {
+                                    phoneSlotFocused = false
                                     if (focusedIndex < totalItems - 1) {
                                         if (focusedIndex < fields.size) hideKeyboardAll()
                                         focusedIndex++
@@ -12053,10 +12174,12 @@ private fun InputModal(
                                     true
                                 }
                                 Key.DirectionLeft -> {
+                                    if (phoneEnabled && focusedIndex == fields.size + toggleFields.size) phoneSlotFocused = false
                                     if (focusedIndex == fields.size + toggleFields.size + 2) focusedIndex = fields.size + toggleFields.size + 1
                                     true
                                 }
                                 Key.DirectionRight -> {
+                                    if (phoneEnabled && focusedIndex == fields.size + toggleFields.size) phoneSlotFocused = true
                                     if (focusedIndex == fields.size + toggleFields.size + 1) focusedIndex = fields.size + toggleFields.size + 2
                                     true
                                 }
@@ -12072,7 +12195,8 @@ private fun InputModal(
                                             true
                                         }
                                         focusedIndex == fields.size + toggleFields.size -> {
-                                            pasteClipboardIntoTarget()
+                                            if (phoneEnabled && phoneSlotFocused) phoneRevealed = !phoneRevealed
+                                            else pasteClipboardIntoTarget()
                                             true
                                         }
                                         focusedIndex == fields.size + toggleFields.size + 1 -> {
@@ -12118,18 +12242,16 @@ private fun InputModal(
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
                 }
-                // GMC: fill these fields from the phone (empty phone fields leave the TV's as they are).
-                if (fields.isNotEmpty()) {
-                    com.arflix.tv.ui.components.GmcPhoneQr(
+                // On a TV, once "Use your phone" is chosen: fill these fields from the phone.
+                // An empty phone field leaves the TV's as it is.
+                if (phoneEnabled && phoneRevealed) {
+                    PhoneInputPanel(
                         title = title,
-                        fields = fields.map {
-                            com.arflix.tv.server.GmcPhoneServer.Field(it.label, it.value, it.isSecret, !it.singleLine)
-                        },
+                        fields = fields.map { PhoneInputServer.Field(it.label, it.value, it.isSecret, !it.singleLine) },
                         onValues = { values ->
                             values.forEachIndexed { i, v -> if (v.isNotEmpty()) fields.getOrNull(i)?.onValueChange?.invoke(v) }
                         },
                         modifier = Modifier.padding(bottom = 12.dp),
-                        qrSize = 96.dp,
                     )
                 }
 
@@ -12360,7 +12482,8 @@ private fun InputModal(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
-                val isPasteFocused = focusedIndex == fields.size + toggleFields.size
+                val isPasteRowFocused = focusedIndex == fields.size + toggleFields.size
+                val isPasteFocused = isPasteRowFocused && !(phoneEnabled && phoneSlotFocused)
                 val fieldFallbackLabel = stringResource(R.string.settings_field_fallback)
                 val pasteTargetLabel = fields.getOrNull(pasteTargetIndex())
                     ?.label
@@ -12369,8 +12492,13 @@ private fun InputModal(
                     ?.ifBlank { fieldFallbackLabel }
                     ?: fieldFallbackLabel
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                Row(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(
                             color = if (isPasteFocused) Color.White else Color.Black.copy(alpha = 0.82f),
@@ -12402,6 +12530,14 @@ private fun InputModal(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                if (phoneEnabled) {
+                    PhoneInputButton(
+                        revealed = phoneRevealed,
+                        onClick = { phoneRevealed = !phoneRevealed },
+                        focused = isPasteRowFocused && phoneSlotFocused
+                    )
+                }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

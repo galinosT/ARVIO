@@ -82,6 +82,7 @@ import com.arflix.tv.data.repository.CatalogException
 import com.arflix.tv.data.repository.KidsContentFilter
 import com.arflix.tv.data.repository.KidsListApprovalSession
 import com.arflix.tv.data.repository.KidsTrustedTitles
+import com.arflix.tv.data.repository.KidsTrustedCatalogs
 import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.repository.SyncProgress
 import com.arflix.tv.data.repository.SyncStatus
@@ -242,12 +243,14 @@ data class SettingsUiState(
     val secondarySubtitle: String = "Off",
     val trailerAutoPlay: Boolean = true,
     val trailerSoundEnabled: Boolean = false,
+    val showAddonStreamDetails: Boolean = false,
     val trailerDelaySeconds: Int = 1,
     /** 0 keeps the fixed row height; 6..10 divides the TV guide into that many rows. */
     val guideRowCount: Int = 0,
     val trailerInCards: Boolean = true,
     val netflixHomeStyle: Boolean = true,
     val watchlistOnHome: Boolean = false,
+    val hiddenNavigationSections: Set<String> = emptySet(),
     val showBudget: Boolean = true,
     val showEpisodeRatings: Boolean = false,
     val animeStructuringStyle: AnimeStructuringStyle = AnimeStructuringStyle.BROADCAST,
@@ -381,6 +384,8 @@ data class SettingsUiState(
     val catalogs: List<CatalogConfig> = emptyList(),
     val isKidsProfile: Boolean = false,
     val kidsListApproval: KidsListApprovalUi? = null,
+    /** A parent approving (or un-approving) a whole addon catalog for this kids profile. */
+    val kidsCatalogApproval: KidsCatalogApprovalUi? = null,
     val pendingYouTubeUrl: String? = null,
     val youTubeApprovalProfileId: String? = null,
     val youTubeApprovalError: SettingsMessage? = null,
@@ -453,6 +458,18 @@ data class SettingsUiState(
     val telegramUserName: String? = null
 )
 
+/** See [com.arflix.tv.data.repository.KidsTrustedCatalogs]. */
+data class KidsCatalogApprovalUi(
+    val profileId: String,
+    val catalog: CatalogConfig,
+    val catalogKeys: List<String>,
+    val approved: Boolean,
+    val needsPin: Boolean = false,
+    val pinAttempts: Int = 0,
+    val saving: Boolean = false,
+    val error: SettingsMessage? = null
+)
+
 data class KidsListApprovalUi(
     val profileId: String,
     val catalog: CatalogConfig,
@@ -512,6 +529,14 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    /**
+     * Whether the active profile is a kids profile, kept apart from [_uiState]: many updates
+     * build a copy of the state around a suspending call and write it back, and such a stale
+     * copy put back `isKidsProfile = false` on a kids profile — hiding its kids-only options
+     * (list and catalog approvals) for good. See [observeProfileChanges], which repairs it.
+     */
+    private val activeProfileIsKids = MutableStateFlow(false)
     private var kidsListApprovalJob: Job? = null
     private var kidsListApprovalSession: KidsListApprovalSession? = null
     private fun managedPermissions() = if (com.arflix.tv.BuildConfig.PARTNER_MANAGEMENT_ENABLED)
@@ -567,6 +592,7 @@ class SettingsViewModel @Inject constructor(
     private fun autoPlayMinQualityKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "auto_play_min_quality")
     private fun trailerAutoPlayKey() = profileManager.profileBooleanKey("trailer_auto_play")
     private fun trailerSoundEnabledKey() = profileManager.profileBooleanKey("trailer_sound_enabled")
+    private fun addonStreamDetailsKey() = com.arflix.tv.util.addonStreamDetailsKey(profileManager.getProfileIdSync())
     private fun trailerDelayKey() = profileManager.profileStringKey("trailer_delay_seconds")
     private fun guideRowCountKey() = profileManager.profileStringKey("guide_row_count")
     private fun trailerInCardsKey() = profileManager.profileBooleanKey("trailer_in_cards")
@@ -871,6 +897,7 @@ class SettingsViewModel @Inject constructor(
             val autoPlayMaxSizeGb = AutoplayLimits.normalizeSizeGb(prefs[profileManager.profileIntKey("auto_play_max_size_gb")] ?: 0)
             val trailerAutoPlay = prefs[trailerAutoPlayKey()] ?: true
             val trailerSoundEnabled = prefs[trailerSoundEnabledKey()] ?: false
+            val showAddonStreamDetails = prefs[addonStreamDetailsKey()] ?: false
             val trailerDelaySeconds = prefs[trailerDelayKey()]?.toIntOrNull() ?: 1
             val guideRowCount = prefs[guideRowCountKey()]?.toIntOrNull()
                 ?.takeIf { it in 6..10 } ?: 0
@@ -995,6 +1022,7 @@ class SettingsViewModel @Inject constructor(
                 autoPlayMaxSizeGb = autoPlayMaxSizeGb,
                 trailerAutoPlay = trailerAutoPlay,
                 trailerSoundEnabled = trailerSoundEnabled,
+                showAddonStreamDetails = showAddonStreamDetails,
                 trailerDelaySeconds = trailerDelaySeconds,
                 guideRowCount = guideRowCount,
                 trailerInCards = trailerInCards,
@@ -1187,8 +1215,23 @@ class SettingsViewModel @Inject constructor(
 
     private fun observeProfileChanges() {
         viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(profileManager.activeProfileId, context.settingsDataStore.data) { profileId, prefs ->
+                com.arflix.tv.util.readHiddenNavigationSections(prefs[com.arflix.tv.util.hiddenNavigationSectionsKey(profileId)])
+            }.distinctUntilChanged().collect { hidden ->
+                _uiState.update { it.copy(hiddenNavigationSections = hidden) }
+            }
+        }
+        viewModelScope.launch {
             profileRepository.activeProfile.map { it?.isKidsProfile == true }.distinctUntilChanged().collect { isKids ->
+                activeProfileIsKids.value = isKids
                 _uiState.update { it.copy(isKidsProfile = isKids) }
+            }
+        }
+        viewModelScope.launch {
+            // A stale state copy written back must not take the kids flag with it.
+            _uiState.collect { state ->
+                val isKids = activeProfileIsKids.value
+                if (state.isKidsProfile != isKids) _uiState.update { it.copy(isKidsProfile = isKids) }
             }
         }
         viewModelScope.launch {
@@ -2091,6 +2134,24 @@ class SettingsViewModel @Inject constructor(
         preferenceWriter.save(trailerSoundEnabledKey(), enabled, { it.trailerSoundEnabled }, { state, value -> state.copy(trailerSoundEnabled = value) })
     }
 
+    fun setShowAddonStreamDetails(enabled: Boolean) {
+        if (!canManage("playback")) return
+        preferenceWriter.save(addonStreamDetailsKey(), enabled, { it.showAddonStreamDetails }, { state, value -> state.copy(showAddonStreamDetails = value) })
+    }
+
+    fun setNavigationSectionVisible(section: String, visible: Boolean) {
+        if (section !in com.arflix.tv.util.OPTIONAL_NAVIGATION_SECTIONS || !canManage("appearance")) return
+        val hidden = _uiState.value.hiddenNavigationSections.toMutableSet().apply {
+            if (visible) remove(section) else add(section)
+        }
+        preferenceWriter.save(
+            com.arflix.tv.util.hiddenNavigationSectionsKey(profileManager.getProfileIdSync()),
+            com.arflix.tv.util.encodeHiddenNavigationSections(hidden),
+            { com.arflix.tv.util.encodeHiddenNavigationSections(it.hiddenNavigationSections) },
+            { state, value -> state.copy(hiddenNavigationSections = com.arflix.tv.util.readHiddenNavigationSections(value)) }
+        )
+    }
+
     fun setTrailerInCards(enabled: Boolean) {
         if (!canManage("playback")) return
         preferenceWriter.save(trailerInCardsKey(), enabled, { it.trailerInCards }, { state, value -> state.copy(trailerInCards = value) })
@@ -2311,8 +2372,27 @@ class SettingsViewModel @Inject constructor(
 
     fun saveSubtitleAiApiKey(key: String) {
         viewModelScope.launch {
-            context.settingsDataStore.edit { it[subtitleAiApiKeyKey] = key.trim() }
-            _uiState.value = _uiState.value.copy(subtitleAiApiKey = key.trim())
+            // A key's fixed prefix names its provider: follow it, whether the key was typed on the
+            // TV or sent from the phone, so it never sits under the wrong model.
+            val keyModel = com.arflix.tv.ui.screens.player.subtitles.subtitleAiModelForKey(key)
+                ?.takeIf { it != _uiState.value.subtitleAiModel }
+            val leavingGemini = keyModel != null &&
+                _uiState.value.subtitleAiModel == com.arflix.tv.ui.screens.player.subtitles.SubtitleAiModel.GEMINI_FLASH_25
+            context.settingsDataStore.edit {
+                it[subtitleAiApiKeyKey] = key.trim()
+                if (keyModel != null) it[subtitleAiModelKey] = keyModel.name
+            }
+            _uiState.value = _uiState.value.copy(
+                subtitleAiApiKey = key.trim(),
+                subtitleAiModel = keyModel ?: _uiState.value.subtitleAiModel
+            )
+            if (leavingGemini) {
+                // One key slot: live TV AI subtitles and the hearing reference need a Gemini key.
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = SettingsMessage.Res(R.string.ai_model_switched_from_gemini),
+                    toastType = ToastType.INFO
+                )
+            }
             syncLocalStateToCloud(silent = true)
         }
     }
@@ -2331,6 +2411,7 @@ class SettingsViewModel @Inject constructor(
             val server = AiKeyConfigServer.startOnAvailablePort(
                 onKeyReceived = { key ->
                     viewModelScope.launch {
+                        // Also switches the model to the key's provider (see saveSubtitleAiApiKey).
                         saveSubtitleAiApiKey(key)
                         _uiState.value = _uiState.value.copy(
                             aiKeyServerState = _uiState.value.aiKeyServerState.copy(keyReceived = true)
@@ -3205,7 +3286,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun requestKidsListApproval(catalog: CatalogConfig) {
-        if (!_uiState.value.isKidsProfile || !KidsTrustedTitles.isTrustedSource(catalog) || !canManage("catalogs")) return
+        if (!activeProfileIsKids.value || !KidsTrustedTitles.isTrustedSource(catalog) || !canManage("catalogs")) return
         dismissKidsListApproval()
         _uiState.update { it.copy(kidsListApproval = KidsListApprovalUi(profileManager.getProfileIdSync(), catalog)) }
     }
@@ -3271,6 +3352,59 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 if (request.needsPin) kidsListApprovalSession = null
                 _uiState.update { it.copy(kidsListApproval = request.copy(
+                    pinAttempts = request.pinAttempts + 1,
+                    error = e.orCatalogMessage(SettingsMessage.Res(R.string.kids_list_approval_unavailable))
+                )) }
+            }
+        }
+    }
+
+    /** Opens the kids approval of an addon catalog row or collection tile (kids profiles only). */
+    fun openKidsCatalogApproval(catalog: CatalogConfig) {
+        if (!activeProfileIsKids.value || !KidsTrustedCatalogs.isApprovable(catalog) || !canManage("catalogs")) return
+        val profileId = profileManager.getProfileIdSync()
+        viewModelScope.launch {
+            val keys = runCatching { mediaRepository.kidsCatalogKeys(catalog) }.getOrDefault(emptyList())
+            if (keys.isEmpty()) {
+                _uiState.update { it.copy(
+                    toastMessage = SettingsMessage.Res(R.string.kids_catalog_unavailable),
+                    toastType = ToastType.ERROR
+                ) }
+                return@launch
+            }
+            val approved = catalogRepository.kidsCatalogApprovals(profileId).containsAll(keys)
+            _uiState.update { it.copy(kidsCatalogApproval = KidsCatalogApprovalUi(profileId, catalog, keys, approved)) }
+        }
+    }
+
+    /** "Approve" / "Remove approval" pressed: the parent PIN comes next. */
+    fun requestKidsCatalogPin() {
+        _uiState.update { state -> state.copy(kidsCatalogApproval = state.kidsCatalogApproval?.copy(needsPin = true, error = null)) }
+    }
+
+    fun dismissKidsCatalogApproval() {
+        _uiState.update { it.copy(kidsCatalogApproval = null) }
+    }
+
+    fun confirmKidsCatalogPin(pin: String) {
+        val request = _uiState.value.kidsCatalogApproval?.takeIf { it.needsPin && !it.saving } ?: return
+        _uiState.update { it.copy(kidsCatalogApproval = request.copy(saving = true, error = null)) }
+        viewModelScope.launch {
+            try {
+                catalogRepository.setKidsCatalogApproval(request.profileId, request.catalogKeys, !request.approved, pin)
+                _uiState.update { it.copy(
+                    kidsCatalogApproval = null,
+                    toastMessage = SettingsMessage.Res(
+                        if (request.approved) R.string.kids_catalog_unapproved_toast else R.string.kids_catalog_approved_toast,
+                        listOf(request.catalog.title)
+                    ),
+                    toastType = ToastType.SUCCESS
+                ) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(kidsCatalogApproval = request.copy(
+                    saving = false,
                     pinAttempts = request.pinAttempts + 1,
                     error = e.orCatalogMessage(SettingsMessage.Res(R.string.kids_list_approval_unavailable))
                 )) }

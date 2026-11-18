@@ -3276,7 +3276,7 @@ class StreamRepository @Inject constructor(
         originalTitle: String? = null,
         providerId: String? = null
     ): List<StreamSource> = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(timeoutMs.coerceIn(500L, 90_000L)) {
+        val sources = withTimeoutOrNull(timeoutMs.coerceIn(500L, 90_000L)) {
             runCatching {
                 iptvRepository.findMovieVodSources(
                     title = title,
@@ -3298,6 +3298,7 @@ class StreamRepository @Inject constructor(
                 )
             }.getOrDefault(emptyList())
         }.orEmpty()
+        applyQualityRegexFilters(sources)
     }
 
     /** Hands messages an addon sent instead of sources to the running search's [AddonNoticeSink]. */
@@ -3317,6 +3318,7 @@ class StreamRepository @Inject constructor(
 
         return filtered
             .map { stream ->
+                addonYouTubeStream(stream, addon)?.let { return@map it }
                 val rawStreamUrl = stream.getStreamUrl()
                 val streamUrl = when {
                     !rawStreamUrl.isNullOrBlank() -> rawStreamUrl
@@ -3400,7 +3402,30 @@ class StreamRepository @Inject constructor(
             }
     }
 
+    /**
+     * A stream an addon offers as a YouTube video — Stremio's `ytId`, or a youtube.com / youtu.be
+     * link — played through ARVIO's own YouTube player, like a video of the YouTube row (an
+     * addon with a broadcaster's episodes that are only on YouTube, say). Without this the
+     * watch page itself was handed to the player, which can't play a web page. Sideload builds
+     * only, like the rest of YouTube playback from search and sources.
+     */
+    private fun addonYouTubeStream(stream: StremioStream, addon: Addon): StreamSource? {
+        if (!BuildConfig.YOUTUBE_SEARCH_AVAILABLE) return null
+        val videoId = YouTubeCollection.videoIdOfAddonStream(stream.ytId, stream.getStreamUrl()) ?: return null
+        val label = listOfNotNull(stream.name, stream.title)
+            .map { it.trim() }.firstOrNull { it.isNotBlank() }
+        return YouTubeCollection.stream(videoId).copy(
+            source = label ?: YouTubeCollection.ADDON_NAME,
+            addonName = "${addon.name} - ${YouTubeCollection.ADDON_NAME}",
+            description = stream.description?.trim()?.takeIf { it.isNotBlank() }
+        )
+    }
+
     private fun isSupportedPlaybackCandidate(stream: StremioStream): Boolean {
+        // A YouTube video is played through the YouTube player (see addonYouTubeStream).
+        if (BuildConfig.YOUTUBE_SEARCH_AVAILABLE && stream.getStreamUrl()?.let(YouTubeCollection::videoIdFromUrl) != null) {
+            return true
+        }
         val url = stream.getStreamUrl()?.trim().orEmpty()
         if (url.isBlank()) return true
 
@@ -3883,7 +3908,7 @@ class StreamRepository @Inject constructor(
         originalTitle: String? = null,
         providerId: String? = null
     ): List<StreamSource> = withContext(Dispatchers.IO) {
-        withPartialVodResults(timeoutMs.coerceIn(500L, 90_000L)) { onSources ->
+        val sources = withPartialVodResults(timeoutMs.coerceIn(500L, 90_000L)) { onSources ->
             runCatching {
                 iptvRepository.findEpisodeVodSources(
                     title = title,
@@ -3910,6 +3935,8 @@ class StreamRepository @Inject constructor(
                 )
             }.getOrThrow()
         }
+        // Filter after the timeout helper so retained partial results follow the same rules.
+        applyQualityRegexFilters(sources)
     }
 
     suspend fun prefetchEpisodeVod(
@@ -5341,13 +5368,7 @@ class StreamRepository @Inject constructor(
 
         // Use precompiled regexes from cache (no DataStore reads, no recompilation)
         return streams.filter { stream ->
-            val qualityText = buildString {
-                append(stream.quality)
-                if (stream.source.isNotBlank()) {
-                    append(' ')
-                    append(stream.source)
-                }
-            }
+            val qualityText = qualityFilterText(stream)
             cachedQualityFilters.regexes.none { regex -> regex.containsMatchIn(qualityText) }
         }
     }
@@ -5378,19 +5399,22 @@ class StreamRepository @Inject constructor(
         if (compiledRegexes.isEmpty()) return streams
 
         return streams.filter { stream ->
-            val qualityText = buildString {
-                append(stream.quality)
-                if (stream.source.isNotBlank()) {
-                    append(' ')
-                    append(stream.source)
-                }
-            }
+            val qualityText = qualityFilterText(stream)
             // Check if this stream matches any exclusion filter regex
             compiledRegexes.none { regex ->
                 regex.containsMatchIn(qualityText)
             }
         }
     }
+
+private fun qualityFilterText(stream: StreamSource): String = buildString {
+    append(stream.quality)
+    if (stream.source.isNotBlank()) append(' ').append(stream.source)
+    // Xtream can label the series variant while its episode title names no quality at all.
+    if (IptvVodSourceIds.isIptvVodAddonId(stream.addonId) && !stream.rawLabel.isNullOrBlank()) {
+        append(' ').append(stream.rawLabel)
+    }
+}
 
 private object StreamRegexes {
     val MANIFEST_TYPO_REGEX = Regex("""(?i)/manifest\.json[a-z0-9_-]+(?=($|[?]))""")
