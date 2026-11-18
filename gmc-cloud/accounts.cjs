@@ -142,7 +142,48 @@ function stampNow(payload, now = Date.now()) {
   if (payload.addonChanges && typeof payload.addonChanges === "object") {
     for (const c of Object.values(payload.addonChanges)) if (c && typeof c === "object" && "updatedAt" in c) c.updatedAt = now;
   }
+  // Each profile's subtitle choice carries its own time inside profileSettingsById; left old, a box
+  // that ever changed its subtitle language keeps its own and ignores the copy.
+  for (const st of Object.values(payload.profileSettingsById || {})) {
+    if (st && typeof st === "object" && "subtitleSettingsUpdatedAt" in st) st.subtitleSettingsUpdatedAt = now;
+  }
   return payload;
+}
+
+/** Personal data that belongs to a person, not to a setup: it stays with the target account. */
+const PERSONAL_KEYS = ["watchlistByProfile", "watchlistChangesByProfile", "traktTokens", "traktExpiration"];
+
+/**
+ * The snapshot a copy writes: the source's settings, its active profile renamed to the target's
+ * own profile, every time set to now, and the target's own personal data (watchlist) kept.
+ */
+function copyPayload(source, current) {
+  const sourceProfiles = Array.isArray(source.profiles) ? source.profiles : [];
+  const sourceId = source.activeProfileId || sourceProfiles[0]?.id;
+  const targetProfiles = Array.isArray(current?.profiles) ? current.profiles : [];
+  const mapped = targetProfiles.find((pr) => pr?.id === current?.activeProfileId) || targetProfiles[0] || null;
+  let text = JSON.stringify(source);
+  if (sourceId && mapped?.id && mapped.id !== sourceId) text = text.split(sourceId).join(mapped.id);
+  const copy = stampNow(JSON.parse(text));
+  if (mapped?.id) {
+    // Only the target's profile: data the source kept for its other profiles is left out.
+    const keep = mapped.id;
+    for (const [k, v] of Object.entries(copy)) {
+      if (k.endsWith("ByProfile") || k === "profileSettingsById") {
+        if (v && typeof v === "object" && !Array.isArray(v)) copy[k] = keep in v ? { [keep]: v[keep] } : {};
+      }
+    }
+    const own = (copy.profiles || []).find((pr) => pr?.id === keep) || { id: keep };
+    const avatarKeys = Object.keys(mapped).filter((k) => /avatar/i.test(k));
+    copy.profiles = [{ ...own, name: mapped.name, ...Object.fromEntries(avatarKeys.map((k) => [k, mapped[k]])) }];
+    copy.activeProfileId = keep;
+  }
+  for (const k of PERSONAL_KEYS) {
+    if (current && k in current) copy[k] = current[k];
+    else delete copy[k];
+  }
+  copy.traktLinked = !!current?.traktLinked;
+  return { copy, mapped: mapped && mapped.id !== sourceId ? mapped : (mapped || null) };
 }
 
 /** The account's saved settings (payload object), or null when it has none. */
@@ -171,28 +212,9 @@ async function copyAccount(fromEmail, toEmail) {
   if (!payload) throw new Error(`No saved settings for ${normalize(fromEmail)}`);
   let mapped = null;
   const { metrics } = await writeSnapshot(target, (current) => {
-    // The target keeps its own profile (id, name, avatar): the source's active profile's settings
-    // are written under it. Otherwise a box already signed in to the target, whose profile is not in
-    // the copied list, keeps its own defaults and wins over the copy.
-    const sourceProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
-    const sourceId = payload.activeProfileId || sourceProfiles[0]?.id;
-    const targetProfiles = Array.isArray(current?.profiles) ? current.profiles : [];
-    const targetProfile = targetProfiles.find((pr) => pr?.id === current?.activeProfileId) || targetProfiles[0];
-    let text = JSON.stringify(payload);
-    if (sourceId && targetProfile?.id && targetProfile.id !== sourceId) {
-      text = text.split(sourceId).join(targetProfile.id);
-      mapped = targetProfile;
-    }
-    const copy = stampNow(JSON.parse(text));
-    if (mapped) {
-      const own = (copy.profiles || []).find((pr) => pr?.id === mapped.id) || { id: mapped.id };
-      const avatarKeys = Object.keys(mapped).filter((k) => /avatar/i.test(k));
-      copy.profiles = [{ ...own, name: mapped.name, ...Object.fromEntries(avatarKeys.map((k) => [k, mapped[k]])) }];
-      copy.activeProfileId = mapped.id;
-    }
-    delete copy.traktTokens;
-    copy.traktLinked = false;
-    return { payload: copy };
+    const out = copyPayload(payload, current);
+    mapped = out.mapped;
+    return { payload: out.copy };
   });
   const into = mapped ? ` (into its profile "${mapped.name}")` : "";
   return `Copied the settings of ${normalize(fromEmail)} into ${normalize(toEmail)}${into}: ${metrics.profileCount ?? 1} profile(s). Run Sync now on its boxes; sign in to WeTrakr/Simkl/Trakt there.`;
@@ -265,4 +287,4 @@ async function adminFromToken(token) {
   }
 }
 
-module.exports = { list, create, passwd, importArvio, copyAccount, inspect, touch, clearTrakt, adminFromToken, normalize };
+module.exports = { copyPayload, stampNow, list, create, passwd, importArvio, copyAccount, inspect, touch, clearTrakt, adminFromToken, normalize };
