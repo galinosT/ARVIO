@@ -94,12 +94,6 @@ class PersonalListsRepository @Inject constructor(
         trakt.await() + mdb.await() + simkl.await() + weTrakr.await()
     }
 
-    /** The user's WeTrakr lists for the Library, and the titles of one of them. */
-    suspend fun weTrakrLibraryLists(): List<com.arflix.tv.data.repository.wetrakr.WeTrakrLists.UserList> =
-        if (!weTrakrLists.isConnected()) emptyList() else weTrakrLists.ownLists().filterNot { it.locked }
-
-    suspend fun weTrakrListItems(listId: Long) = weTrakrLists.listItems(listId)
-
     /** A Simkl list typed for movies takes no shows and the other way round; mixed lists take both. */
     private fun simklListFits(listType: String, isMovie: Boolean): Boolean {
         val type = listType.lowercase()
@@ -109,6 +103,12 @@ class PersonalListsRepository @Inject constructor(
             else -> true
         }
     }
+
+    /** The user's WeTrakr lists for the Library, and the titles of one of them. */
+    suspend fun weTrakrLibraryLists(): List<com.arflix.tv.data.repository.wetrakr.WeTrakrLists.UserList> =
+        if (!weTrakrLists.isConnected()) emptyList() else weTrakrLists.ownLists().filterNot { it.locked }
+
+    suspend fun weTrakrListItems(listId: Long) = weTrakrLists.listItems(listId)
 
     /** An MDBList list for the Library; [path] is "user/slug", as in its mdblist.com URL. */
     data class MdbListLibraryList(val id: Long, val title: String, val path: String?)

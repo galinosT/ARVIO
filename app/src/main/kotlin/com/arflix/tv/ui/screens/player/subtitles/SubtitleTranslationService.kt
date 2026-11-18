@@ -187,6 +187,7 @@ class SubtitleTranslationService(
         } else when (modelProvider()) {
             SubtitleAiModel.GROQ_LLAMA_70B -> matchGroq(prompt, payload, apiKey)
             SubtitleAiModel.GEMINI_FLASH_25 -> matchGemini(prompt, payload, apiKey)
+            SubtitleAiModel.CLAUDE_HAIKU -> matchClaude(prompt, payload, apiKey)
         }) ?: return null
         val array = extractJsonArray(raw) ?: return null
         val matches = ArrayList<LineMatch>(array.length())
@@ -291,6 +292,16 @@ class SubtitleTranslationService(
         }
     }
 
+    private suspend fun matchClaude(systemPrompt: String, payload: String, apiKey: String): String? =
+        when (val reply = claudeMessagesCall(client, apiKey, systemPrompt, payload)) {
+            is ClaudeReply.Text -> reply.text
+            is ClaudeReply.Refused -> null
+            is ClaudeReply.Failed -> {
+                Log.w(TAG, "matchSubtitleLines claude failed: ${reply.message}")
+                null
+            }
+        }
+
     suspend fun translateBatch(lines: List<String>, targetLanguage: String): TranslationResult =
         translateBatchInternal(lines, targetLanguage, depth = 0)
 
@@ -340,14 +351,15 @@ class SubtitleTranslationService(
         val result = if (claudeKey.isNotBlank()) translateClaude(lines, targetLanguage, claudeKey) else when (modelProvider()) {
             SubtitleAiModel.GROQ_LLAMA_70B -> translateGroq(lines, targetLanguage, apiKey)
             SubtitleAiModel.GEMINI_FLASH_25 -> translateGemini(lines, targetLanguage, apiKey)
+            SubtitleAiModel.CLAUDE_HAIKU -> translateClaude(lines, targetLanguage, apiKey)
         }
 
         // A content-policy block poisons the whole window because of (usually) one line.
         // Bisect so the innocuous majority still gets translated; a line that stays blocked all
         // the way down is shown in its original language. Depth cap keeps worst-case extra API
-        // calls bounded (window → halves → quarters).
+        // calls bounded (window → halves → quarters). A Claude reply cut off at max_tokens is
+        // bisected the same way: half the lines fit where the whole batch did not.
         if (!result.success &&
-            // GMC: a Claude reply cut off at max_tokens is split the same way (half fits).
             (result.errorMessage == TRANSLATION_ERROR_CONTENT_BLOCKED || result.errorMessage == CLAUDE_ERROR_MAX_TOKENS) &&
             lines.size >= 2 && depth < 2
         ) {
@@ -430,11 +442,14 @@ class SubtitleTranslationService(
 
     /** GMC: which model translates right now, for the subtitle memory. */
     internal fun modelLabel(): String =
-        if (claudeKeyProvider().isNotBlank()) GMC_CLAUDE_MODEL_ID else modelProvider().name.lowercase()
+        if (claudeKeyProvider().isNotBlank() || modelProvider() == SubtitleAiModel.CLAUDE_HAIKU) GMC_CLAUDE_MODEL_ID
+        else modelProvider().name.lowercase()
 
     /** GMC: one free-form Claude request (the glossary builder); null when Claude is off or fails. */
     internal suspend fun claudeComplete(systemPrompt: String, userText: String): String? {
-        val key = claudeKeyProvider().takeIf { it.isNotBlank() } ?: return null
+        val key = claudeKeyProvider().takeIf { it.isNotBlank() }
+            ?: apiKeyProvider().takeIf { it.isNotBlank() && modelProvider() == SubtitleAiModel.CLAUDE_HAIKU }
+            ?: return null
         return (claudeTranslateCall(client, key, systemPrompt, userText) as? ClaudeReply.Text)?.text
     }
 

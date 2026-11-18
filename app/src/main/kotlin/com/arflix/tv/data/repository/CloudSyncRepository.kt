@@ -344,6 +344,7 @@ class CloudSyncRepository @Inject constructor(
         // Null from older clients: keep the local preference.
         val netflixHomeStyle: Boolean? = null,
         val watchlistOnHome: Boolean? = null,
+        val hiddenNavigationSections: List<String>? = null,
         val clockFormat: String = "24h",
         val guideRowCount: Int? = null,
         val showBudget: Boolean = true,
@@ -351,6 +352,8 @@ class CloudSyncRepository @Inject constructor(
         val animeEpisodeStructuring: String = AnimeStructuringStyle.BROADCAST.id,
         val iptvFavoritesOnHome: Boolean = true,
         val showLoadingStats: Boolean? = null,
+        // Older clients omit this field; do not reset an opted-in TV on restore.
+        val showAddonStreamDetails: Boolean? = null,
         val spoilerBlurEnabled: Boolean = false,
         val volumeBoostDb: Int = 0,
         val includeSpecials: Boolean = false,
@@ -367,7 +370,13 @@ class CloudSyncRepository @Inject constructor(
         val streamProvidersCustomOrder: String = "",
         val streamIntegrationsMacroOrder: String = "",
         val streamMacroEnabledMap: Map<String, Boolean> = emptyMap(),
-        val streamProviderEnabledMap: Map<String, Boolean> = emptyMap()
+        val streamProviderEnabledMap: Map<String, Boolean> = emptyMap(),
+        /**
+         * Addon catalogs a parent approved for this kids profile (KidsTrustedCatalogs). Only the
+         * approvals sync; each device records the titles they list as its catalogs load. Null
+         * from older clients, which must not clear approvals.
+         */
+        val kidsCatalogApprovals: List<String>? = null
     )
 
     // ── DataStore key helpers ──
@@ -754,6 +763,7 @@ class CloudSyncRepository @Inject constructor(
                         trailerInCards = prefs[trailerInCardsKeyFor(profile.id)] ?: true,
                         netflixHomeStyle = prefs[netflixHomeStyleKeyFor(profile.id)] ?: true,
                         watchlistOnHome = prefs[watchlistOnHomeKeyFor(profile.id)] ?: false,
+                        hiddenNavigationSections = com.arflix.tv.util.navigationSectionsForCloud(prefs, profile.id),
                         clockFormat = prefs[clockFormatKeyFor(profile.id)] ?: "24h",
                         guideRowCount = prefs[guideRowCountKeyFor(profile.id)]?.toIntOrNull()
                             ?.takeIf { it in 6..10 } ?: 0,
@@ -762,6 +772,7 @@ class CloudSyncRepository @Inject constructor(
                         animeEpisodeStructuring = prefs[animeEpisodeStructuringKeyFor(profile.id)] ?: AnimeStructuringStyle.BROADCAST.id,
                         iptvFavoritesOnHome = prefs[iptvFavoritesOnHomeKeyFor(profile.id)] ?: true,
                         showLoadingStats = prefs[showLoadingStatsKeyFor(profile.id)] ?: true,
+                        showAddonStreamDetails = prefs[com.arflix.tv.util.addonStreamDetailsKey(profile.id)] ?: false,
                         spoilerBlurEnabled = prefs[spoilerBlurKeyFor(profile.id)] ?: false,
                         volumeBoostDb = prefs[volumeBoostDbKeyFor(profile.id)]?.toIntOrNull()?.coerceIn(0, 15) ?: 0,
                         dnsProvider = prefs[dnsProviderKeyFor(profile.id)] ?: globalDnsProvider,
@@ -797,7 +808,8 @@ class CloudSyncRepository @Inject constructor(
                         streamProvidersCustomOrder = streamCloudState.customProviderOrder,
                         streamIntegrationsMacroOrder = streamCloudState.macroCategoryOrder,
                         streamMacroEnabledMap = streamCloudState.macroEnabledMap,
-                        streamProviderEnabledMap = streamCloudState.providerEnabledMap
+                        streamProviderEnabledMap = streamCloudState.providerEnabledMap,
+                        kidsCatalogApprovals = prefs[KidsTrustedCatalogs.approvalsKey(profile.id)]?.sorted()
                     )
                 )
             }
@@ -1777,6 +1789,7 @@ class CloudSyncRepository @Inject constructor(
                         prefs[trailerDelayKeyFor(profileId)] = state.trailerDelaySeconds.toString()
                         prefs[trailerInCardsKeyFor(profileId)] = state.trailerInCards
                         state.watchlistOnHome?.let { prefs[watchlistOnHomeKeyFor(profileId)] = it }
+                        com.arflix.tv.util.restoreNavigationSections(prefs, profileId, state.hiddenNavigationSections)
                         prefs[clockFormatKeyFor(profileId)] = state.clockFormat
                         // Older clients omit this field; keep the local preference in that case.
                         state.guideRowCount?.let { count ->
@@ -1788,6 +1801,7 @@ class CloudSyncRepository @Inject constructor(
                         prefs[animeEpisodeStructuringKeyFor(profileId)] = state.animeEpisodeStructuring.ifBlank { AnimeStructuringStyle.BROADCAST.id }
                         prefs[iptvFavoritesOnHomeKeyFor(profileId)] = state.iptvFavoritesOnHome
                         state.showLoadingStats?.let { prefs[showLoadingStatsKeyFor(profileId)] = it }
+                        state.showAddonStreamDetails?.let { prefs[com.arflix.tv.util.addonStreamDetailsKey(profileId)] = it }
                         prefs[spoilerBlurKeyFor(profileId)] = state.spoilerBlurEnabled
                         prefs[volumeBoostDbKeyFor(profileId)] = state.volumeBoostDb.coerceIn(0, 15).toString()
                         prefs[dnsProviderKeyFor(profileId)] = state.dnsProvider.ifBlank { "system" }
@@ -1835,6 +1849,17 @@ class CloudSyncRepository @Inject constructor(
                                 providerEnabledMap = state.streamProviderEnabledMap
                             )
                         )
+                        state.kidsCatalogApprovals?.let { approvals ->
+                            val approved = approvals.toSet()
+                            val members = KidsTrustedCatalogs.membersKey(profileId)
+                            val current = prefs[KidsTrustedCatalogs.approvalsKey(profileId)].orEmpty()
+                            prefs[KidsTrustedCatalogs.approvalsKey(profileId)] = approved
+                            // An approval removed on another device takes its titles with it here.
+                            val revoked = current - approved
+                            if (revoked.isNotEmpty()) {
+                                prefs[members] = KidsTrustedCatalogs.withoutCatalogs(prefs[members].orEmpty(), revoked)
+                            }
+                        }
                     }
                 }
             }

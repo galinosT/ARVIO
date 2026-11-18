@@ -251,7 +251,7 @@
     <string name="ai_remove_hi_title">Remover descrições para deficientes auditivos</string>
     <string name="ai_remove_hi_desc">Remover marcadores entre colchetes [som] antes da tradução</string>
     <string name="ai_api_key_title">Chave de API</string>
-    <string name="ai_api_key_desc">Digite sua chave de API da Groq ou Gemini manualmente</string>
+    <string name="ai_api_key_desc">Digite sua chave de API da Groq, Gemini ou Claude manualmente</string>
     <string name="ai_scan_qr_title">Escanear código QR para definir chave</string>
     <string name="ai_scan_qr_desc">Abra um navegador no celular para inserir a chave de API</string>
     <string name="ai_groq_disclaimer">Plano gratuito Groq: ~30 requisições/min</string>
@@ -264,7 +264,7 @@
     <string name="ai_api_key_dialog_subtitle_gemini">Insira sua chave de API do Gemini</string>
     <string name="ai_key_saved_title">Chave de API salva</string>
     <string name="ai_key_saved_subtitle">A tradução por IA está pronta para uso</string>
-    <string name="ai_qr_scan_hint">Escaneie com seu celular — escolha Groq ou Gemini</string>
+    <string name="ai_qr_scan_hint">Escaneie com seu celular — escolha Groq, Gemini ou Claude</string>
     <string name="smooth_scrolling">Rolagem mais suave</string>
     <string name="smooth_scrolling_desc">Usar transições suaves premium ao navegar pelas fileiras de pôsteres</string>
 
@@ -1569,4 +1569,15 @@
     <string name="live_ai_subs_needs_key">Adicione primeiro uma chave de API do Google Gemini</string>
     <string name="live_ai_subs_auto_title">Traduzir automaticamente ao iniciar um canal</string>
     <string name="live_ai_subs_auto_desc">Cada canal começa com legendas IA, sem as escolher no menu de legendas</string>
+
+    <!-- Type on the phone (QR in TV text dialogs) -->
+    <string name="phone_input_button">Usar o telemóvel</string>
+    <string name="phone_input_button_hide">Ocultar código do telemóvel</string>
+    <string name="phone_input_qr_title">📱 Pelo telemóvel</string>
+    <string name="phone_input_qr_hint">Leia o código para escrever ou colar no telemóvel.</string>
+    <string name="phone_input_page_hint">O que enviar aparece na TV. Prima OK lá para guardar.</string>
+    <string name="phone_input_page_send">Enviar para a TV</string>
+    <string name="phone_input_page_sent">Enviado ✓ — prima OK na TV.</string>
+    <string name="phone_input_page_not_sent">Não enviado</string>
+    <string name="phone_input_page_expired">Este código expirou — leia novamente o código QR na TV.</string>
 </resources>

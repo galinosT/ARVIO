@@ -1108,6 +1108,9 @@ class HomeViewModel @Inject constructor(
     /** Get the stream URL for an IPTV MediaItem. */
     fun getIptvStreamUrl(itemId: Int): String? = iptvChannelMap[itemId]?.streamUrl
 
+    /** The playlist's request headers for an IPTV MediaItem's channel (Referer, User-Agent...). */
+    fun getIptvRequestHeaders(itemId: Int): Map<String, String> = iptvChannelMap[itemId]?.requestHeaders.orEmpty()
+
     // The same resolver and client limits as the Live TV screen, so a channel previews on Home
     // exactly when it plays there.
     private val iptvPlaybackUrlResolver by lazy {
@@ -2659,6 +2662,21 @@ class HomeViewModel @Inject constructor(
                     loadHomeData()
                 }
         }
+        viewModelScope.launch {
+            // A kids profile's approved addon catalogs (KidsTrustedCatalogs) only trust what they
+            // list once loaded after the approval: reload when this profile's approvals change —
+            // here or from another device's sync — so an approved row shows without a restart.
+            var last: Pair<String, Set<String>>? = null
+            profileManager.activeProfileId.combine(context.settingsDataStore.data) { profileId, prefs ->
+                profileId to prefs[com.arflix.tv.data.repository.KidsTrustedCatalogs.approvalsKey(profileId)].orEmpty()
+            }.distinctUntilChanged().collect { current ->
+                val previous = last
+                last = current
+                if (previous != null && previous.first == current.first && previous.second != current.second) {
+                    loadHomeData()
+                }
+            }
+        }
 
         viewModelScope.launch {
             var previousStatus: com.arflix.tv.updater.UpdateStatus = com.arflix.tv.updater.UpdateStatus.Idle
@@ -3387,10 +3405,14 @@ class HomeViewModel @Inject constructor(
                     loadedFreshCatalogRows = loadedFreshCatalogRows || freshCustomCategories.any { hasRealItems(it) }
 
                     // Fall back to previously cached data for any custom catalog
-                    // that failed to load in this round
+                    // that failed to load in this round. Not for the YouTube row: it is read
+                    // from the profile's own catalog list, so an empty answer means its last
+                    // video was removed, and the old copy would keep showing that video.
                     val stickyCustomById = currentBaseCategories
                         .filter { category ->
-                            customCatalogConfigs.any { it.id == category.id } && category.items.isNotEmpty()
+                            customCatalogConfigs.any {
+                                it.id == category.id && it.sourceType != CatalogSourceType.YOUTUBE
+                            } && category.items.isNotEmpty()
                         }
                         .associateBy { it.id }
                     val freshCustomById = freshCustomCategories.associateBy { it.id }
@@ -3986,6 +4008,17 @@ class HomeViewModel @Inject constructor(
                                 if (requestId == loadHomeRequestId) {
                                     updateMobileCategoryRow(cfg.id, category, hasMore = result.hasMore && !isHardCappedTop10Catalog(cfg.id), nextOffset = result.nextOffset)
                                     markHomeDataLoadSuccessful(requestId)
+                                    persistCategoriesCache(_uiState.value.categories)
+                                }
+                            }
+                        } else if (cfg.sourceType == CatalogSourceType.YOUTUBE) {
+                            // Read from the profile's own catalog list: empty means its last video
+                            // was removed, so the row on screen is out of date (see loadHomeData).
+                            withContext(Dispatchers.Main.immediate) {
+                                if (requestId == loadHomeRequestId) {
+                                    _uiState.value = _uiState.value.copy(
+                                        categories = _uiState.value.categories.filterNot { it.id == cfg.id }
+                                    )
                                     persistCategoriesCache(_uiState.value.categories)
                                 }
                             }
