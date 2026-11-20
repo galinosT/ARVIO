@@ -2174,7 +2174,9 @@ class PlayerViewModel @Inject constructor(
             season = currentSeason.takeIf { currentMediaType == MediaType.TV },
             episode = currentEpisode.takeIf { currentMediaType == MediaType.TV },
             subtitle = kind,
-            detail = log.detail(kind, state.selectedSubtitle, aiSourceSubtitle, state.autoSync?.offsetMs ?: 0L, gmcLastMatchStep),
+            // The server keeps 400 characters of this line: a shorter file name leaves room for the rest.
+            detail = "src: ${gmcSourceLabel(state.selectedStream, maxName = 80)} (${gmcSourceReason ?: "?"}) | " +
+                log.detail(kind, state.selectedSubtitle, aiSourceSubtitle, state.autoSync?.offsetMs ?: 0L, gmcLastMatchStep),
             memoryPercent = translationManager.gmcMemoryPercent.takeIf { kind == "ai" },
             model = runCatching { translationManager.gmcModelLabel() }.getOrNull().takeIf { kind == "ai" },
         )
@@ -3060,18 +3062,28 @@ class PlayerViewModel @Inject constructor(
                 "usedRecent=${recentCandidate != null} " +
                 "usedPreferred=${hasExplicitPreferred && (selected === preferredFromBingeGroup || selected === preferredNavigationCandidate)}"
         )
+        // GMC: why this source (playback log / sync debug).
+        val gmcDemoted = healthyStreams.count { streamRepository.getPlaybackHostHealthPenalty(it) > 0 }
+        val gmcBaseReason = when {
+            recentCandidate != null -> "same source as last time"
+            hasExplicitPreferred && (selected === preferredFromBingeGroup || selected === preferredNavigationCandidate) ->
+                "same release as the previous episode"
+            keepsOwnStreamOrder(selected) -> "first in the AIOStreams list"
+            else -> "GMC ranking (resolution, size)"
+        } + (if (gmcDemoted > 0) " · $gmcDemoted demoted (server failed recently)" else "")
         // GMC: a source chosen by ranking (not the one last watched, not one asked for) gives way to
-        // a same-resolution source with an embedded subtitle in the viewer's language.
+        // a source of the same resolution and HDR with an embedded subtitle in the viewer's language.
         val subtitleLang = targetSubtitleLangCode
         val pickCandidates = if (
             recentCandidate == null && !hasExplicitPreferred && !currentIsLiveStreamPlayback &&
             subtitleLang.isNotBlank() && GmcEmbeddedSubtitlePick.isEnabled(context)
         ) {
-            GmcEmbeddedSubtitlePick.candidates(selected, healthyStreams) { qualityScore(it.quality) }
+            GmcEmbeddedSubtitlePick.candidates(selected, healthyStreams) { qualityScoreForAutoPlay(it) }
         } else {
             emptyList()
         }
         if (pickCandidates.isEmpty()) {
+            gmcPendingSourceReason = gmcBaseReason
             selectStream(selected)
             return
         }
@@ -3082,6 +3094,11 @@ class PlayerViewModel @Inject constructor(
             val picked = runCatching { GmcEmbeddedSubtitlePick.pick(context, pickCandidates, subtitleLang) }.getOrNull()
             playbackDiag("gmcEmbeddedSubtitlePick picked=${streamDiag(picked)}")
             gmcSubtitlePickJob = null
+            gmcPendingSourceReason = if (picked != null && picked !== selected) {
+                "built-in Greek subtitle (#${pickCandidates.indexOf(picked) + 1} of ${pickCandidates.size} checked, same resolution and HDR)"
+            } else {
+                "$gmcBaseReason · no built-in Greek in ${pickCandidates.size} checked"
+            }
             if (canStartAutoplay()) selectStream(picked ?: selected)
         }
     }
@@ -3136,6 +3153,21 @@ class PlayerViewModel @Inject constructor(
         streams: List<StreamSource>,
         preferredLanguage: String
     ): List<StreamSource> {
+        // GMC: an aggregator (AIOStreams) already ranks its results by the user's own sort
+        // criteria (cached, resolution, HDR, quality, size…), so within it autoplay keeps that
+        // order — what the list shows first is what plays. Only a recently failing server still
+        // demotes a source. [streams] arrive in the addon's order (sortStreamsByQualityAndSize)
+        // and sortedWith is stable, so equal ranks keep it.
+        val gmcOwnOrder = Comparator<StreamSource> { a, b ->
+            if (keepsOwnStreamOrder(a) && keepsOwnStreamOrder(b)) 0 else 1
+        }
+        if (streams.all { keepsOwnStreamOrder(it) }) {
+            return streams.sortedWith(
+                compareBy<StreamSource> { streamRepository.getPlaybackHostHealthPenalty(it) }
+                    .thenBy { addonOrderIndex(it) }
+                    .then(gmcOwnOrder)
+            )
+        }
         return streams.sortedWith(
             compareBy<StreamSource> { streamRepository.getPlaybackHostHealthPenalty(it) }
                 .thenBy { addonOrderIndex(it) }
@@ -3332,7 +3364,34 @@ class PlayerViewModel @Inject constructor(
     /**
      * Select a stream for playback
      */
+    // GMC: why the playing source was chosen — set just before selectStream by autoplay, the
+    // failover and a pick by hand; shown in the playback log and (sync debug) sent at once.
+    @Volatile private var gmcPendingSourceReason: String? = null
+    private var gmcSourceReason: String? = null
+
+    internal fun gmcNoteSourceReason(reason: String) {
+        gmcPendingSourceReason = reason
+    }
+
+    /** "file name · size" of [stream], for the logs. */
+    private fun gmcSourceLabel(stream: StreamSource?, maxName: Int = 140): String {
+        stream ?: return "-"
+        val name = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() }
+            ?: stream.source.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        return listOf(name.take(maxName), stream.size.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · ")
+    }
+
     fun selectStream(stream: StreamSource, resumePositionMs: Long? = null) {
+        run {
+            val pending = gmcPendingSourceReason
+            gmcPendingSourceReason = null
+            val previousUrl = _uiState.value.selectedStream?.url
+            val changed = stream.url.isNullOrBlank() || stream.url != previousUrl
+            if (pending != null || changed) {
+                gmcSourceReason = pending ?: "other (resume, link or provided source)"
+                gmcSendDebug("source", "playing ${gmcSourceLabel(stream)} — ${gmcSourceReason}")
+            }
+        }
         // A source chosen by hand (or by the check itself) ends a running embedded-subtitle check.
         gmcSubtitlePickJob?.takeIf { it.isActive }?.cancel()
         gmcSubtitlePickJob = null

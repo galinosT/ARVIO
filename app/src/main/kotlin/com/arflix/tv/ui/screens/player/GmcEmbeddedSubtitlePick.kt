@@ -30,6 +30,9 @@ import kotlin.coroutines.resume
  * in parallel, without playing, and their track lists read. The first one, in the addon's order,
  * with a matching (non-forced) text track plays; when none has one, or the check runs out of
  * time, the top-ranked source plays as before (addon subtitle or AI, as usual).
+ *
+ * Only sources of the same resolution AND the same HDR class (Nov 2026): a Greek track is not
+ * worth losing HDR on an OLED — the AI translation covers the subtitle.
  */
 internal object GmcEmbeddedSubtitlePick {
     private const val TAG = "GmcEmbeddedSubs"
@@ -49,11 +52,24 @@ internal object GmcEmbeddedSubtitlePick {
     ): List<StreamSource> {
         if (!isHttp(selected)) return emptyList()
         val level = resolution(selected)
+        val hdr = isHdr(selected)
         val rest = ranked.asSequence()
-            .filter { it !== selected && it.url != selected.url && isHttp(it) && resolution(it) == level }
+            .filter { it !== selected && it.url != selected.url && isHttp(it) && resolution(it) == level && isHdr(it) == hdr }
             .take(MAX_CANDIDATES - 1)
             .toList()
         return if (rest.isEmpty()) emptyList() else listOf(selected) + rest
+    }
+
+    private val HDR_REGEX = Regex("""(?i)\b(hdr(10)?(\+|plus)?|dv|dovi|dolby[ ._-]?vision)\b""")
+
+    /** HDR10/HDR10+/HDR/Dolby Vision, as the addon's text names it. */
+    internal fun isHdr(stream: StreamSource): Boolean {
+        val text = buildString {
+            append(stream.quality).append(' ').append(stream.source)
+            stream.behaviorHints?.filename?.let { append(' ').append(it) }
+            stream.description?.let { append(' ').append(it) }
+        }
+        return HDR_REGEX.containsMatchIn(text)
     }
 
     private fun isHttp(stream: StreamSource): Boolean {

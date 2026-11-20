@@ -57,6 +57,18 @@ class RecentPlayedSourceTest {
     }
 
     @Test
+    fun aSourceTextEveryResultSharesIsNoMatch() {
+        // AIOStreams: every result reads "StremThru Torz (Instant TB)"; with no URL or file match,
+        // the first of the list must not be marked as the one last played.
+        val played = stream(source = "StremThru Torz (Instant TB)", url = "https://addon/play/old")
+        val streams = listOf(
+            stream(source = "StremThru Torz (Instant TB)", url = "https://addon/play/a"),
+            stream(source = "StremThru Torz (Instant TB)", url = "https://addon/play/b"),
+        )
+        assertThat(findRecentSourceMatch(streams, recordOf(played))).isNull()
+    }
+
+    @Test
     fun theSameFileFromAnotherAddonIsNotTheRecentSource() {
         val played = stream(addonId = "torrentio", url = "https://same/url", filename = "a.mkv")
         val streams = listOf(stream(addonId = "comet", url = "https://same/url", filename = "a.mkv"))

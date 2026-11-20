@@ -1094,6 +1094,7 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
                 rebufferRecoverAttempted = false
                 longRebufferCount = 0
                 isAutoAdvancing = true
+                viewModel.gmcNoteSourceReason("failover: the previous source did not play")
                 viewModel.selectStream(streams[nextIndex])
                 true
             }
@@ -3332,6 +3333,7 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
         pendingStartupFailureRecorded = false
         rebufferRecoverAttempted = false
         longRebufferCount = 0
+        viewModel.gmcNoteSourceReason("picked by hand")
         viewModel.selectStream(stream, resumePosition)
         return true
     }

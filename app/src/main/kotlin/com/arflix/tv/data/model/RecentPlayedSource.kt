@@ -60,10 +60,15 @@ data class RecentPlayedSource(
  */
 fun findRecentSourceMatch(streams: List<StreamSource>, recent: RecentPlayedSource?): StreamSource? {
     recent ?: return null
+    // GMC: the source text alone (the weakest match) only counts when it is unique. An aggregator
+    // like AIOStreams gives every result the same text ("StremThru Torz (Instant TB)"), and then it
+    // marked the FIRST source of the list as the one last played.
+    val sourceTextShared = recent.source.isNotBlank() &&
+        streams.count { it.addonId.trim() == recent.addonId && it.source.trim() == recent.source } > 1
     var best: StreamSource? = null
     var bestScore = 0
     for (stream in streams) {
-        val score = recentSourceMatchScore(stream, recent)
+        val score = recentSourceMatchScore(stream, recent).let { if (it == 1 && sourceTextShared) 0 else it }
         if (score > bestScore) {
             best = stream
             bestScore = score
