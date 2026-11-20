@@ -25,14 +25,18 @@ class SkipIntroRepository @Inject constructor(
     private val cache = ConcurrentHashMap<String, List<SkipInterval>>()
     private val malIdCache = ConcurrentHashMap<String, String>()
 
-    suspend fun getSkipIntervals(imdbId: String?, season: Int, episode: Int): List<SkipInterval> {
+    /**
+     * GMC: [durationMs] is the file's runtime once the player knows it; with it SkipMe.db is asked
+     * too (see GmcSkipProviders). Null asks the providers that do not need it.
+     */
+    suspend fun getSkipIntervals(imdbId: String?, season: Int, episode: Int, durationMs: Long? = null): List<SkipInterval> {
         if (imdbId.isNullOrBlank()) return emptyList()
 
-        val cacheKey = "$imdbId:$season:$episode"
+        val cacheKey = "$imdbId:$season:$episode:${durationMs != null}"
         cache[cacheKey]?.let { return it }
 
-        // 1) IntroDB (shows)
-        val introDb = fetchFromIntroDb(imdbId, season, episode)
+        // 1) IntroDB (shows), GMC: completed per kind by TheIntroDB and SkipMe.db
+        val introDb = GmcSkipProviders.withMore(fetchFromIntroDb(imdbId, season, episode), imdbId, season, episode, durationMs)
         if (introDb.isNotEmpty()) {
             cache[cacheKey] = introDb
             return introDb

@@ -138,6 +138,14 @@ object GmcSubtitleMemory {
         }.onFailure { Log.w(TAG, "glossary upload failed: ${it.message}") }
     }
 
+    /** GMC: one line per playback for the server's log (see GmcPlayLog). Failures are only logged. */
+    suspend fun reportPlay(config: Config, play: JSONObject) = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(request(config, "/v1/plays").post(play.toString().toRequestBody(json)).build())
+                .execute().use { if (!it.isSuccessful) error("HTTP ${it.code}") }
+        }.onFailure { Log.w(TAG, "play report failed: ${it.message}") }
+    }
+
     /** For the settings screen: "ok (1234 lines)" or why not. */
     suspend fun check(config: Config): String = withContext(Dispatchers.IO) {
         runCatching {

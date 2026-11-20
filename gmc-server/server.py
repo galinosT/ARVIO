@@ -13,6 +13,10 @@ Auth: every /v1 request must carry "Authorization: Bearer <GMC_TOKEN>".
                                 -> {"stored": n}
   GET  /v1/glossary?key=<series>&lang=Greek  -> {"glossary": "..."}  (404 when none)
   PUT  /v1/glossary             {"key": "...", "lang": "Greek", "glossary": "..."}
+  POST /v1/plays                {"device": "...", "title": "...", "imdb": "tt..", "season": 2, "episode": 20,
+                                 "subtitle": "ai|addon|embedded|none", "detail": "...",
+                                 "memory_pct": 40, "model": "..."}   one line per playback (GMC)
+  GET  /v1/plays?limit=200[&format=text]  the most recent playbacks, newest first
   GET  /health                  -> {"ok": true, "lines": n}
 """
 
@@ -33,6 +37,8 @@ PORT = int(os.environ.get("GMC_PORT", "8787"))
 MAX_BODY = 2 * 1024 * 1024
 MAX_TEXTS = 500
 MAX_TEXT_LEN = 2000
+MAX_PLAYS = 20000  # older playback lines are dropped beyond this
+PLAY_KINDS = ("ai", "addon", "embedded", "none")
 
 _lock = threading.Lock()
 _db = None
@@ -53,6 +59,12 @@ def db():
             "CREATE TABLE IF NOT EXISTS glossaries ("
             " key TEXT NOT NULL, lang TEXT NOT NULL, glossary TEXT NOT NULL,"
             " updated INTEGER NOT NULL, PRIMARY KEY (key, lang))"
+        )
+        _db.execute(
+            "CREATE TABLE IF NOT EXISTS plays ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER NOT NULL, device TEXT NOT NULL,"
+            " title TEXT NOT NULL, imdb TEXT, season INTEGER, episode INTEGER, subtitle TEXT NOT NULL,"
+            " detail TEXT, memory_pct INTEGER, model TEXT)"
         )
         _db.commit()
     return _db
@@ -128,6 +140,71 @@ def put_glossary(key, lang, glossary):
         conn.commit()
 
 
+def _short(value, limit):
+    return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
+
+
+def _small_int(value, low, high):
+    return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
+
+
+def add_play(data):
+    """One playback, as a GMC box reported it. None when the report is unusable."""
+    device, title = _short(data.get("device"), 80), _short(data.get("title"), 200)
+    kind = data.get("subtitle")
+    if not device or not title or kind not in PLAY_KINDS:
+        return None
+    row = (
+        int(time.time()), device, title, _short(data.get("imdb"), 20),
+        _small_int(data.get("season"), 0, 999), _small_int(data.get("episode"), 0, 9999), kind,
+        _short(data.get("detail"), 400), _small_int(data.get("memory_pct"), 0, 100), _short(data.get("model"), 80),
+    )
+    with _lock:
+        conn = db()
+        conn.execute(
+            "INSERT INTO plays (created, device, title, imdb, season, episode, subtitle, detail, memory_pct, model)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row,
+        )
+        conn.execute("DELETE FROM plays WHERE id <= (SELECT MAX(id) FROM plays) - ?", (MAX_PLAYS,))
+        conn.commit()
+    return True
+
+
+def recent_plays(limit):
+    with _lock:
+        rows = db().execute(
+            "SELECT created, device, title, imdb, season, episode, subtitle, detail, memory_pct, model"
+            " FROM plays ORDER BY id DESC LIMIT ?", (limit,),
+        ).fetchall()
+    keys = ("created", "device", "title", "imdb", "season", "episode", "subtitle", "detail", "memory_pct", "model")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def _local_time(ts):
+    """Athens time when the image has time zone data, else UTC (marked)."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.fromtimestamp(ts, ZoneInfo(os.environ.get("GMC_TZ", "Europe/Athens"))).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ts))
+
+
+def plays_text(plays):
+    out = []
+    for p in plays:
+        when = _local_time(p["created"])
+        episode = " S%02dE%02d" % (p["season"], p["episode"]) if p["season"] is not None and p["episode"] is not None else ""
+        extra = []
+        if p["model"]:
+            extra.append(p["model"])
+        if p["memory_pct"] is not None:
+            extra.append("memory %d%%" % p["memory_pct"])
+        kind = p["subtitle"] + (" (" + ", ".join(extra) + ")" if extra else "")
+        out.append("  ".join(x for x in (when, p["device"], p["title"] + episode, kind, p["detail"] or "") if x))
+    return "\n".join(out) + "\n"
+
+
 def count_lines():
     with _lock:
         return db().execute("SELECT COUNT(*) FROM lines").fetchone()[0]
@@ -184,12 +261,32 @@ class Handler(BaseHTTPRequestHandler):
             if glossary is None:
                 return self.reply(404, {"error": "none"})
             return self.reply(200, {"glossary": glossary})
+        if url.path == "/v1/plays":
+            q = parse_qs(url.query)
+            try:
+                limit = max(1, min(int(q.get("limit", ["200"])[0]), 5000))
+            except ValueError:
+                return self.reply(400, {"error": "bad limit"})
+            plays = recent_plays(limit)
+            if q.get("format", [""])[0] == "text":
+                body = plays_text(plays).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return None
+            return self.reply(200, {"plays": plays})
         return self.reply(404, {"error": "not found"})
 
     def do_POST(self):
         if not self.authorized():
             return self.reply(401, {"error": "unauthorized"})
         data = self.body()
+        if self.path == "/v1/plays":
+            if not isinstance(data, dict) or add_play(data) is None:
+                return self.reply(400, {"error": "bad play"})
+            return self.reply(200, {"ok": True})
         if not isinstance(data, dict) or not isinstance(data.get("lang"), str) or not data["lang"].strip():
             return self.reply(400, {"error": "bad request"})
         lang = data["lang"]

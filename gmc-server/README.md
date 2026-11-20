@@ -3,6 +3,9 @@
 A small service for the GMC boxes:
 - **Translation memory:** subtitle lines already translated on any box are reused by every other box, at no cost.
 - **Glossaries:** each series' glossary (names, forms of address) used in Claude translation.
+- **Playback log:** every box reports one line per title (five minutes in): which subtitle ended
+  on screen — AI translation (with model and share from memory), an addon subtitle, a built-in
+  track or none — and the last step of the subtitle scan.
 
 Python standard library and one SQLite file. Nothing else.
 
@@ -29,6 +32,27 @@ If Caddy itself runs in Docker, attach it to the same network as `gmc-memory` an
 ## In GMC
 
 Settings → AI subtitles → **Subtitle memory on server (GMC)**: enter the address (`subs.example.gr`) and the `GMC_TOKEN`. You can send them from your phone using the QR code. **Check** verifies the connection.
+
+## Playback log
+
+```sh
+TOKEN=$(grep GMC_TOKEN .env | cut -d= -f2)
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8787/v1/plays?format=text&limit=50"
+```
+
+One line per playback, newest first: time (Athens), box (its Android "Device name" and a short id),
+title, `ai` / `addon` / `embedded` / `none`, and details. Without `format=text` it is JSON.
+Only the latest 20,000 lines are kept.
+
+## Update
+
+Put the new `server.py` and `Dockerfile` in place (the data folder and `.env` stay), then:
+
+```sh
+docker compose up -d --build
+```
+
+New tables are created on start; existing data is untouched.
 
 ## Backup
 

@@ -2218,6 +2218,15 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
         }
     }
 
+    // GMC: the playhead and the duration for the skip providers and the per-playback report.
+    DisposableEffect(exoPlayer) {
+        viewModel.bindGmcPlayer(
+            positionMs = { if (playerReleased) 0L else exoPlayer.currentPosition },
+            durationMs = { if (playerReleased) 0L else exoPlayer.duration.takeIf { it != C.TIME_UNSET } ?: 0L },
+        )
+        onDispose { viewModel.bindGmcPlayer(positionMs = { 0L }, durationMs = { 0L }) }
+    }
+
     // Sync by hearing (sideload build only): the playhead, the duration and the selected audio track.
     DisposableEffect(exoPlayer) {
         if (!com.arflix.tv.BuildConfig.AUDIO_SYNC_AVAILABLE) return@DisposableEffect onDispose {}

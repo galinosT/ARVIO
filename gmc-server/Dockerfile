@@ -1,7 +1,7 @@
 FROM python:3.12-alpine
 WORKDIR /app
 COPY server.py .
-RUN adduser -D -u 10001 gmc && mkdir /data && chown gmc /data
+RUN apk add --no-cache tzdata && adduser -D -u 10001 gmc && mkdir /data && chown gmc /data
 USER gmc
 VOLUME /data
 EXPOSE 8787

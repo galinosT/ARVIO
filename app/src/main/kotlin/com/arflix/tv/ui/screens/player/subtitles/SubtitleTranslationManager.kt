@@ -29,7 +29,8 @@ class SubtitleTranslationManager(
         // If we get a 429, we back off 5s.
         private const val BATCH_WINDOW_MS = 150L  // wait up to 150ms for more items to batch
         private const val GMC_BLANK_CUES_FOR_IMAGE_TRACK = 3
-        private const val GMC_REPORT_AFTER_LINES = 60
+        // The first lookups at episode start (the lookahead window) already cover this many.
+        private const val GMC_REPORT_AFTER_LINES = 20
     }
 
     var isEnabled: Boolean = false
@@ -87,6 +88,16 @@ class SubtitleTranslationManager(
             if (gmcMemoryLines > 0) onGmcMemoryReport?.invoke(gmcMemoryLines, total)
         }
     }
+
+    /** GMC: share of the lines so far that came from the memory server; null before any line. */
+    internal val gmcMemoryPercent: Int?
+        get() {
+            val total = gmcMemoryLines + gmcModelLines
+            return if (total == 0) null else gmcMemoryLines * 100 / total
+        }
+
+    /** GMC: the model translating right now (for the per-playback report). */
+    internal fun gmcModelLabel(): String = service.modelLabel()
 
     val translatedCount: Int get() = cache.size
 

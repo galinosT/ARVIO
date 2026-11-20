@@ -2100,7 +2100,31 @@ class PlayerViewModel @Inject constructor(
             // Force a recompute on the next position tick.
             lastActiveSkipType = null
             _uiState.value = _uiState.value.copy(activeSkipInterval = null, skipIntervals = intervals, skipIntervalDismissed = false)
+            // GMC: SkipMe.db answers only with the runtime. Once the player knows it, ask again
+            // with it for whatever kind (intro, ending) is still missing.
+            if (com.arflix.tv.data.repository.GmcSkipProviders.isComplete(intervals)) return@launch
+            var durationMs = 0L
+            for (i in 0 until 60) {
+                durationMs = gmcDurationMs()
+                if (durationMs > 60_000L) break
+                kotlinx.coroutines.delay(1_000L)
+            }
+            if (durationMs <= 60_000L || activeSkipRequestKey != requestKey) return@launch
+            val more = skipIntroRepository.getSkipIntervals(imdbId, season, episode, durationMs)
+            if (activeSkipRequestKey != requestKey || more.size == intervals.size) return@launch
+            skipIntervals = more
+            lastActiveSkipType = null
+            _uiState.value = _uiState.value.copy(skipIntervals = more)
         }
+    }
+
+    /** GMC: the playing file's duration, 0 until known (bound by the player screen). */
+    private var gmcDurationMs: () -> Long = { 0L }
+    private var gmcPositionMs: () -> Long = { 0L }
+
+    internal fun bindGmcPlayer(positionMs: () -> Long, durationMs: () -> Long) {
+        gmcPositionMs = positionMs
+        gmcDurationMs = durationMs
     }
 
     /**
@@ -2110,6 +2134,7 @@ class PlayerViewModel @Inject constructor(
      * playback starting.
      */
     private fun resetPlaybackClock() {
+        gmcLastMatchStep = null
         lastKnownPositionMs = 0L
         playerTextTracksResolved = false
     }
@@ -2117,6 +2142,44 @@ class PlayerViewModel @Inject constructor(
     fun onPlaybackPosition(positionMs: Long) {
         lastKnownPositionMs = positionMs
         updateActiveSkipInterval(positionMs)
+        gmcMaybeReportPlay(positionMs)
+    }
+
+    // GMC: one line per title to the gmc-server's playback log (GmcPlayLog), five minutes in.
+    // Five minutes WATCHED, not position: a resume at 0:40 must not report before the scan decides.
+    private var gmcReportedPlayKey: String? = null
+    private var gmcPlayWatchKey: String? = null
+    private var gmcPlayWatchFromMs = 0L
+    @Volatile private var gmcLastMatchStep: String? = null
+
+    private fun gmcMaybeReportPlay(positionMs: Long) {
+        if (currentMediaId == 0) return
+        val key = "$currentMediaType:$currentMediaId:${currentSeason ?: 0}:${currentEpisode ?: 0}"
+        if (gmcReportedPlayKey == key) return
+        if (gmcPlayWatchKey != key || positionMs < gmcPlayWatchFromMs) {
+            gmcPlayWatchKey = key
+            gmcPlayWatchFromMs = positionMs
+            return
+        }
+        if (positionMs - gmcPlayWatchFromMs < com.arflix.tv.ui.screens.player.subtitles.GmcPlayLog.REPORT_AFTER_MS) return
+        gmcReportedPlayKey = key
+        val state = _uiState.value
+        val log = com.arflix.tv.ui.screens.player.subtitles.GmcPlayLog
+        val kind = log.kind(state.isAiTranslating, state.selectedSubtitle)
+        val play = com.arflix.tv.ui.screens.player.subtitles.GmcPlayLog.Play(
+            device = log.deviceLabel(context),
+            title = state.title.ifBlank { "?" },
+            imdb = currentImdbId,
+            season = currentSeason.takeIf { currentMediaType == MediaType.TV },
+            episode = currentEpisode.takeIf { currentMediaType == MediaType.TV },
+            subtitle = kind,
+            detail = log.detail(kind, state.selectedSubtitle, aiSourceSubtitle, state.autoSync?.offsetMs ?: 0L, gmcLastMatchStep),
+            memoryPercent = translationManager.gmcMemoryPercent.takeIf { kind == "ai" },
+            model = runCatching { translationManager.gmcModelLabel() }.getOrNull().takeIf { kind == "ai" },
+        )
+        viewModelScope.launch {
+            runCatching { log.send(context, play) }
+        }
     }
 
     fun dismissSkipInterval() {
@@ -7565,6 +7628,7 @@ class PlayerViewModel @Inject constructor(
      */
     private fun matchStep(text: String) {
         Log.i("SubMatch", "step: $text")
+        gmcLastMatchStep = text
     }
 
     private fun startMatchListening() {
