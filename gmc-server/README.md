@@ -44,6 +44,18 @@ One line per playback, newest first: time (Athens), box (its Android "Device nam
 title, `ai` / `addon` / `embedded` / `none`, and details. Without `format=text` it is JSON.
 Only the latest 20,000 lines are kept.
 
+## Sync debug
+
+A box with **Settings → AI subtitles → Debug συγχρονισμού** on also sends, per title, the whole
+subtitle scan (the player's own log lines), and every manual fix — switching to AI, picking another
+subtitle, changing the delay — with what was on screen and the scan that put it there:
+
+```sh
+curl -s -H "Authorization: Bearer $(grep '^GMC_TOKEN=' .env | cut -d= -f2-)" "http://127.0.0.1:8787/v1/debug?format=text&limit=5"
+```
+
+Only the latest 3,000 events are kept.
+
 ## Update
 
 Put the new `server.py` and `Dockerfile` in place (the data folder and `.env` stay), then:

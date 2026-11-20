@@ -82,6 +82,56 @@ class GmcFineSyncTest {
         }
     }
 
+    // ── Nov 2026: reference coverage and steady drift ──────────────────────────────────────
+
+    private fun evenStarts(minutes: Int, seed: Int = 1): List<Long> {
+        val r = Random(seed)
+        val out = ArrayList<Long>()
+        var t = 20_000L
+        while (t < minutes * 60_000L) { out += t; t += 3_100L + r.nextLong(-900, 900) }
+        return out
+    }
+
+    /** media = subtitle + shift(at): a subtitle that needs [shift] to sit on [film]. */
+    private fun shifted(film: List<Long>, seed: Int = 7, shift: (Long) -> Long): List<Long> {
+        val r = Random(seed)
+        return film.filterIndexed { i, _ -> i % 9 != 4 }.map { it - shift(it) + r.nextLong(-60, 60) }
+    }
+
+    @Test
+    fun aReferenceCoveringOnlyTheFirstMinutesMeasuresThoseMinutes() {
+        // A reference built from what the player buffered: the first 7 minutes of a 110-minute film.
+        val film = evenStarts(110)
+        val m = GmcFineSync.measure(shifted(film) { 300 }, film.filter { it < 7 * 60_000L })
+        assertThat(m != null && m.consistent).isTrue()
+        assertThat(abs(m!!.correctionMs - 300) < 60).isTrue()
+    }
+
+    @Test
+    fun aSteadyDriftIsAStretch() {
+        val film = evenStarts(110)
+        val m = GmcFineSync.measure(shifted(film) { at -> 200 + at * 800 / (110 * 60_000L) }, film)!!
+        assertThat(m.consistent).isFalse()
+        val s = m.stretch!!
+        assertThat(abs(s.shiftAt(60_000L) - 207) < 80).isTrue()
+        assertThat(abs(s.shiftAt(105 * 60_000L) - 964) < 80).isTrue()
+    }
+
+    @Test
+    fun aJumpIsNotAStretch() {
+        val film = evenStarts(110)
+        val m = GmcFineSync.measure(shifted(film) { at -> if (at < 55 * 60_000L) 0 else 2_000 }, film)
+        assertThat(m == null || (!m.consistent && m.stretch == null)).isTrue()
+    }
+
+    @Test
+    fun aConstantShiftIsNoStretch() {
+        val film = evenStarts(110)
+        val m = GmcFineSync.measure(shifted(film) { 400 }, film)!!
+        assertThat(m.consistent).isTrue()
+        assertThat(m.stretch).isNull()
+    }
+
     private fun measured(
         errorMs: Long,
         seed: Int = 42,

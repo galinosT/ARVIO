@@ -17,6 +17,10 @@ Auth: every /v1 request must carry "Authorization: Bearer <GMC_TOKEN>".
                                  "subtitle": "ai|addon|embedded|none", "detail": "...",
                                  "memory_pct": 40, "model": "..."}   one line per playback (GMC)
   GET  /v1/plays?limit=200[&format=text]  the most recent playbacks, newest first
+  POST /v1/debug                {"device", "title", "imdb", "season", "episode", "event", "detail", "trace"}
+                                 sync debug (a box with "Debug συγχρονισμού" on): a title's whole scan
+                                 ("play") or a manual fix ("user_ai", "user_pick", "user_delay")
+  GET  /v1/debug?limit=20[&format=text]   the most recent debug events, newest first
   GET  /health                  -> {"ok": true, "lines": n}
 """
 
@@ -39,6 +43,8 @@ MAX_TEXTS = 500
 MAX_TEXT_LEN = 2000
 MAX_PLAYS = 20000  # older playback lines are dropped beyond this
 PLAY_KINDS = ("ai", "addon", "embedded", "none")
+MAX_DEBUG = 3000  # debug events kept
+MAX_TRACE_LEN = 20000
 
 _lock = threading.Lock()
 _db = None
@@ -65,6 +71,12 @@ def db():
             " id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER NOT NULL, device TEXT NOT NULL,"
             " title TEXT NOT NULL, imdb TEXT, season INTEGER, episode INTEGER, subtitle TEXT NOT NULL,"
             " detail TEXT, memory_pct INTEGER, model TEXT)"
+        )
+        _db.execute(
+            "CREATE TABLE IF NOT EXISTS debug ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER NOT NULL, device TEXT NOT NULL,"
+            " title TEXT NOT NULL, imdb TEXT, season INTEGER, episode INTEGER, event TEXT NOT NULL,"
+            " detail TEXT, trace TEXT)"
         )
         _db.commit()
     return _db
@@ -168,6 +180,51 @@ def add_play(data):
         conn.execute("DELETE FROM plays WHERE id <= (SELECT MAX(id) FROM plays) - ?", (MAX_PLAYS,))
         conn.commit()
     return True
+
+
+def add_debug(data):
+    """One sync-debug event from a box. None when unusable."""
+    device, title, event = _short(data.get("device"), 80), _short(data.get("title"), 200), _short(data.get("event"), 40)
+    if not device or not title or not event:
+        return None
+    trace = data.get("trace") if isinstance(data.get("trace"), str) else ""
+    row = (
+        int(time.time()), device, title, _short(data.get("imdb"), 20),
+        _small_int(data.get("season"), 0, 999), _small_int(data.get("episode"), 0, 9999), event,
+        _short(data.get("detail"), 2000), trace[-MAX_TRACE_LEN:],
+    )
+    with _lock:
+        conn = db()
+        conn.execute(
+            "INSERT INTO debug (created, device, title, imdb, season, episode, event, detail, trace)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", row,
+        )
+        conn.execute("DELETE FROM debug WHERE id <= (SELECT MAX(id) FROM debug) - ?", (MAX_DEBUG,))
+        conn.commit()
+    return True
+
+
+def recent_debug(limit):
+    with _lock:
+        rows = db().execute(
+            "SELECT created, device, title, imdb, season, episode, event, detail, trace"
+            " FROM debug ORDER BY id DESC LIMIT ?", (limit,),
+        ).fetchall()
+    keys = ("created", "device", "title", "imdb", "season", "episode", "event", "detail", "trace")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def debug_text(events):
+    out = []
+    for e in events:
+        episode = " S%02dE%02d" % (e["season"], e["episode"]) if e["season"] is not None and e["episode"] is not None else ""
+        out.append("=== %s  %s  %s%s  [%s]" % (_local_time(e["created"]), e["device"], e["title"], episode, e["event"]))
+        if e["detail"]:
+            out.append(e["detail"])
+        if e["trace"]:
+            out.append(e["trace"])
+        out.append("")
+    return "\n".join(out) + "\n"
 
 
 def recent_plays(limit):
@@ -277,12 +334,32 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return None
             return self.reply(200, {"plays": plays})
+        if url.path == "/v1/debug":
+            q = parse_qs(url.query)
+            try:
+                limit = max(1, min(int(q.get("limit", ["20"])[0]), 500))
+            except ValueError:
+                return self.reply(400, {"error": "bad limit"})
+            events = recent_debug(limit)
+            if q.get("format", [""])[0] == "text":
+                body = debug_text(events).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return None
+            return self.reply(200, {"events": events})
         return self.reply(404, {"error": "not found"})
 
     def do_POST(self):
         if not self.authorized():
             return self.reply(401, {"error": "unauthorized"})
         data = self.body()
+        if self.path == "/v1/debug":
+            if not isinstance(data, dict) or add_debug(data) is None:
+                return self.reply(400, {"error": "bad debug event"})
+            return self.reply(200, {"ok": True})
         if self.path == "/v1/plays":
             if not isinstance(data, dict) or add_play(data) is None:
                 return self.reply(400, {"error": "bad play"})

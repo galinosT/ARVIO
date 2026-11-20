@@ -50,7 +50,7 @@ import com.arflix.tv.ui.theme.TextSecondary
  */
 
 /** TV settings row indices, after the existing ones (0–54). */
-internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 63)
+internal val GMC_CLAUDE_ROWS = listOf(60, 61, 62, 69, 63)
 
 /** GMC: the settings export / import row sits last in Settings → Accounts, at this focus index. */
 internal const val GMC_ACCOUNTS_EXPORT_INDEX = 22
@@ -80,6 +80,8 @@ private var revision by mutableStateOf(0)
 private var showKeyDialog by mutableStateOf(false)
 private var showStatsDialog by mutableStateOf(false)
 
+private const val TITLE_DEBUG = "Debug συγχρονισμού"
+private const val DESC_DEBUG = "Στέλνει στον server μνήμης όλη τη διαδρομή του συγχρονισμού κάθε τίτλου και κάθε χειροκίνητη διόρθωση (AI, άλλος υπότιτλος, καθυστέρηση). Μόνο για διερεύνηση προβλημάτων."
 private const val TITLE_STATS = "Στατιστικά συγχρονισμού (GMC)"
 private const val DESC_STATS = "Πόσες φορές μπήκε μετάφραση AI με τους κανόνες του GMC και πόσες θα έμπαινε στο αρχικό ARVIO."
 
@@ -103,6 +105,16 @@ internal fun onGmcClaudeRowClick(context: Context, index: Int) {
         }
         61 -> showKeyDialog = true
         62 -> showStatsDialog = true
+        69 -> {
+            val debug = com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug
+            val on = !debug.isOn(context)
+            if (on && com.arflix.tv.ui.screens.player.subtitles.GmcSubtitleMemory.config(context) == null) {
+                gmcToast(context, "Χρειάζεται ο server μνήμης υποτίτλων (διεύθυνση και κλειδί)")
+                return
+            }
+            debug.setOn(context, on)
+            revision++
+        }
         63, 64 -> onGmcExtraRowClick(index)
         65 -> {
             com.arflix.tv.ui.screens.home.GmcHomeMotion.setEnabled(
@@ -184,6 +196,14 @@ internal fun GmcClaudeTvRow(index: Int, isFocused: Boolean, modifier: Modifier) 
             )
             GmcStatsDialogHost()
         }
+        69 -> SettingsToggleRow(
+            title = TITLE_DEBUG,
+            subtitle = DESC_DEBUG,
+            isEnabled = remember(revision) { com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug.isOn(context) },
+            isFocused = isFocused,
+            onToggle = { onGmcClaudeRowClick(context, 69) },
+            modifier = modifier,
+        )
         63, 64 -> GmcExtraTvRow(index, isFocused, modifier)
         65 -> SettingsToggleRow(
             title = TITLE_SNAPPY,
@@ -264,6 +284,14 @@ internal fun GmcClaudeMobileRows() {
         subtitle = DESC_STATS,
         value = statsSummary(remember(revision) { GmcSyncStats.snapshot(context) }),
         onClick = { onGmcClaudeRowClick(context, 62) },
+    )
+    val debugOn = remember(revision) { com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug.isOn(context) }
+    MobileSettingsRow(
+        title = TITLE_DEBUG,
+        subtitle = DESC_DEBUG,
+        value = if (debugOn) "On" else "Off",
+        toggleChecked = debugOn,
+        onClick = { onGmcClaudeRowClick(context, 69) },
     )
     GmcExtraMobileRows()
     GmcClaudeKeyDialogHost()

@@ -3229,6 +3229,13 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
     }
 
     // Sync in-player subtitle delay with the renderer factory (microseconds = ms * 1000)
+    // GMC: a manual delay is a manual fix — reported (Debug συγχρονισμού) once it settles.
+    LaunchedEffect(subtitleSyncOffsetMs) {
+        if (subtitleSyncOffsetMs != 0L) {
+            kotlinx.coroutines.delay(4_000L)
+            viewModel.gmcUserDelay(subtitleSyncOffsetMs)
+        }
+    }
     LaunchedEffect(subtitleSyncOffsetMs) {
         aiRenderersFactory.syncOffsetUs.set(subtitleSyncOffsetMs * 1000L)
     }

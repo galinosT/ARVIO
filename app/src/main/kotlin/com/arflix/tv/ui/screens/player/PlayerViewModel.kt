@@ -2135,6 +2135,7 @@ class PlayerViewModel @Inject constructor(
      */
     private fun resetPlaybackClock() {
         gmcLastMatchStep = null
+        gmcDebugSinceMs = System.currentTimeMillis() - 5_000L
         lastKnownPositionMs = 0L
         playerTextTracksResolved = false
     }
@@ -2180,6 +2181,52 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { log.send(context, play) }
         }
+        gmcSendDebug("play", play.detail)
+    }
+
+    // GMC: "Debug συγχρονισμού" (GmcSyncDebug) — the scan of this title and every manual fix.
+    @Volatile private var gmcDebugSinceMs = 0L
+
+    private fun gmcSendDebug(event: String, detail: String) {
+        val debug = com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug
+        if (!debug.isOn(context) || currentMediaId == 0) return
+        val state = _uiState.value
+        val since = gmcDebugSinceMs.takeIf { it > 0L } ?: (System.currentTimeMillis() - 15 * 60_000L)
+        val positionS = gmcPositionMs() / 1000
+        val title = state.title.ifBlank { "?" }
+        val imdb = currentImdbId
+        val season = currentSeason.takeIf { currentMediaType == MediaType.TV }
+        val episode = currentEpisode.takeIf { currentMediaType == MediaType.TV }
+        val device = com.arflix.tv.ui.screens.player.subtitles.GmcPlayLog.deviceLabel(context)
+        viewModelScope.launch {
+            runCatching {
+                val trace = debug.traceSince(since)
+                val body = org.json.JSONObject().apply {
+                    put("device", device)
+                    put("title", title)
+                    imdb?.let { put("imdb", it) }
+                    season?.let { put("season", it) }
+                    episode?.let { put("episode", it) }
+                    put("event", event)
+                    put("detail", "at %d:%02d · %s".format(java.util.Locale.US, positionS / 60, positionS % 60, detail))
+                    put("trace", trace)
+                }
+                debug.send(context, body)
+            }
+        }
+    }
+
+    /** GMC: the manual subtitle delay knob settled on [delayMs] (reported only with debug on). */
+    internal fun gmcUserDelay(delayMs: Long) {
+        gmcSendDebug("user_delay", "${gmcOnScreen()} → manual delay ${delayMs}ms")
+    }
+
+    /** What is on screen now, for a manual-fix event. */
+    private fun gmcOnScreen(): String {
+        val state = _uiState.value
+        val log = com.arflix.tv.ui.screens.player.subtitles.GmcPlayLog
+        val kind = log.kind(state.isAiTranslating, state.selectedSubtitle)
+        return "was $kind: " + log.detail(kind, state.selectedSubtitle, aiSourceSubtitle, state.autoSync?.offsetMs ?: 0L, gmcLastMatchStep)
     }
 
     fun dismissSkipInterval() {
@@ -3745,6 +3792,7 @@ class PlayerViewModel @Inject constructor(
                     "embedded=${subtitle.isEmbedded} (was \"${_uiState.value.selectedSubtitle?.label ?: "-"}\", " +
                     "auto-correction ${_uiState.value.autoSync?.offsetMs ?: 0}ms)"
             )
+            gmcSendDebug("user_pick", "${gmcOnScreen()} → picked \"${subtitle.label}\" (${subtitle.provider.ifBlank { if (subtitle.isEmbedded) "built-in" else "?" }})")
             // cancelFindBestMatch also drops any auto-match timing correction: the user's own pick
             // owns its timing from here on (the manual delay knob still applies).
             cancelFindBestMatch("user picked a subtitle")
@@ -4193,6 +4241,12 @@ class PlayerViewModel @Inject constructor(
         val source = findAiSourceSubtitle(_uiState.value.subtitles)
             ?: findAiSourceSubtitle(listOfNotNull(aiSourceSubtitle)) ?: return
         if (isUserAction) {
+            // GMC: the user overruled what was on screen — forget any remembered match for this
+            // file so it is not served again, and (debug) report what was there.
+            if (!_uiState.value.isAiTranslating) {
+                gmcSendDebug("user_ai", gmcOnScreen())
+                writeCachedMatch(null)
+            }
             userLockedSubtitleKey = null
             cancelFindBestMatch("user chose AI translation")
             subtitleSelectionJob?.cancel()
@@ -4928,6 +4982,22 @@ class PlayerViewModel @Inject constructor(
                 val intercept = plan.result.alignmentInterceptMs
                 val rewritten = SubtitleSyncMatcher.retimeTimestamps(raw) { start, end ->
                     moved[start to end] ?: ((start * scale + intercept).toLong() to (end * scale + intercept).toLong())
+                }
+                val served = localizeSubtitle(sub.copy(id = sub.id + RETIMED_SUBTITLE_ID_SUFFIX), rewritten)
+                applyAutoSync(sub, null)
+                selectSubtitle(served, isUserAction = false)
+                return true
+            }
+
+            // GMC: a steady drift (GmcFineSync.Stretch) served as a rewritten copy. The line was
+            // measured on the subtitle's starts plus [offsetMs]: media = t + a + b·t with
+            // t = start + offsetMs, i.e. start·(1+b) + offsetMs·(1+b) + a.
+            fun gmcSelectStretched(sub: Subtitle, line: com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.Stretch, offsetMs: Long): Boolean {
+                val raw = rawBySubKey["${sub.provider}|${sub.id}"] ?: return false
+                val scale = 1.0 + line.rate
+                val intercept = offsetMs * scale + line.interceptMs
+                val rewritten = SubtitleSyncMatcher.retimeTimestamps(raw) { start, end ->
+                    (start * scale + intercept).toLong().coerceAtLeast(0L) to (end * scale + intercept).toLong().coerceAtLeast(0L)
                 }
                 val served = localizeSubtitle(sub.copy(id = sub.id + RETIMED_SUBTITLE_ID_SUFFIX), rewritten)
                 applyAutoSync(sub, null)
@@ -6116,8 +6186,38 @@ class PlayerViewModel @Inject constructor(
                 if (gmcRetimeUnconfirmed) {
                     Log.i("SubMatch", "[gmc] \"${winner.sub.label}\": re-timed line by line but not confirmed by the AI")
                 }
-                val gmcKeepAi = gmcAiPossible &&
-                    ((gmcMeasurement != null && !gmcMeasurement.consistent) || gmcRetimeUnconfirmed)
+                var gmcKeepAi = gmcAiPossible &&
+                    ((gmcMeasurement != null && !gmcMeasurement.consistent && gmcMeasurement.stretch == null) || gmcRetimeUnconfirmed)
+                // GMC: before giving way to AI, the next subtitles in score order — Mission: Impossible
+                // (Nov 2026): the scan's pick drifted, another one in the pack was spot on, and AI
+                // took over without looking at it. Each must pass the same fine check (one constant
+                // amount, or one steady drift) with most of its lines pairing; served as a fix to its
+                // own timing, never remembered.
+                var gmcAlt: Pair<ScoredCandidate, com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.Measurement>? = null
+                if (gmcKeepAi) {
+                    val tried = HashSet<String>().apply { add("${gmcChecked.sub.provider}|${gmcChecked.sub.id}") }
+                    for (c in (results ?: emptyList()).sortedByDescending { it.score }) {
+                        if (tried.size > GMC_NEXT_CANDIDATES) break
+                        val key = "${c.sub.provider}|${c.sub.id}"
+                        if (!tried.add(key) || c.score <= 0.0 || c.retime?.uniform == false || key in aiRejected) continue
+                        val cues = loaded.firstOrNull { (s, _) -> s.provider == c.sub.provider && s.id == c.sub.id }?.second ?: continue
+                        val m = com.arflix.tv.ui.screens.player.subtitles.GmcFineSync.measure(
+                            cues.map { it.startMs + c.offsetMs }, gmcReferenceStarts
+                        ) ?: continue
+                        val ok = (m.consistent || m.stretch != null) && m.pairShare >= GMC_NEXT_MIN_PAIR_SHARE &&
+                            (accepted(c) || c.score >= GMC_NEXT_MIN_SCORE)
+                        Log.i(
+                            "SubMatch",
+                            "[gmc] next \"${c.sub.label}\" ${"%.2f".format(c.score)}: ${m.shiftMs}ms thirds=${m.thirds.joinToString("/")} " +
+                                "paired ${(m.pairShare * 100).toInt()}%" + (if (m.stretch != null) " stretch" else "") + if (ok) " -> taken" else " -> no"
+                        )
+                        if (ok) { gmcAlt = c to m; break }
+                    }
+                    if (gmcAlt != null) {
+                        gmcKeepAi = false
+                        matchStep("4· GMC: \"${winner.sub.label}\" not in sync — \"${gmcAlt.first.sub.label}\" is")
+                    }
+                }
                 if (gmcKeepAi) {
                     stopAudioSync()
                     val aiHolding = _uiState.value.isAiTranslating || tryAiFallbackAfterScan()
@@ -6130,7 +6230,7 @@ class PlayerViewModel @Inject constructor(
                         showMatchToast(
                             PlayerMessage.Raw(
                                 if (gmcRetimeUnconfirmed) "Ο υπότιτλος «${winner.sub.label}» δεν επιβεβαιώθηκε — μένει η μετάφραση AI"
-                                else "Ο υπότιτλος «${winner.sub.label}» δεν είναι συγχρονισμένος σε όλο το επεισόδιο — μένει η μετάφραση AI"
+                                else "Ο υπότιτλος «${winner.sub.label}» δεν είναι συγχρονισμένος σε όλη τη διάρκεια — μένει η μετάφραση AI"
                             )
                         )
                         return@launch
@@ -6139,12 +6239,18 @@ class PlayerViewModel @Inject constructor(
                 if (gmcMeasurement == null && winner.retime?.uniform != false) {
                     com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordUnmeasured(context)
                 }
-                val gmcCorrectionMs = gmcMeasurement?.correctionMs ?: 0L
+                val gmcFinalMeasurement = gmcAlt?.second ?: gmcMeasurement
+                val gmcStretch = gmcFinalMeasurement?.takeIf { !it.consistent }?.stretch
+                val gmcOuterDecided = decided
+                @Suppress("NAME_SHADOWING")
+                val decided: ScoredCandidate = gmcAlt?.first ?: (gmcOuterDecided ?: winner)
+                val gmcBase: ScoredCandidate = gmcAlt?.first ?: winner
+                val gmcCorrectionMs = gmcFinalMeasurement?.correctionMs ?: 0L
                 if (gmcCorrectionMs != 0L) {
                     com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordFineTune(context, gmcCorrectionMs)
                 }
                 com.arflix.tv.ui.screens.player.subtitles.GmcSyncStats.recordScan(context, gmcAiPossible, originalAi = false, gmcAi = false)
-                val gmcWinner = if (gmcCorrectionMs == 0L) winner else winner.copy(offsetMs = winner.offsetMs + gmcCorrectionMs)
+                val gmcWinner = if (gmcCorrectionMs == 0L) gmcBase else gmcBase.copy(offsetMs = gmcBase.offsetMs + gmcCorrectionMs)
                 @Suppress("NAME_SHADOWING")
                 val winner = gmcWinner
                 stopAudioSync()
@@ -6154,7 +6260,10 @@ class PlayerViewModel @Inject constructor(
                 val retimedCopy = winner.retime?.takeIf { !it.uniform }
                 val keepsProvisional = provisional != null && !provisionalDisplaced && retimedCopy == null &&
                     winner.sub.provider == provisional.provider && winner.sub.id == provisional.id
-                if (retimedCopy != null && selectRetimedLocally(winner.sub, retimedCopy)) {
+                if (gmcStretch != null && gmcSelectStretched(winner.sub, gmcStretch, winner.offsetMs)) {
+                    Log.i("SubMatch", "[gmc] \"${winner.sub.label}\": steady drift, stretched (rate ${"%.5f".format(gmcStretch.rate)}, at start ${gmcStretch.shiftAt(0L)}ms)")
+                    matchStep("4· switched to \"${winner.sub.label}\" — steady drift, stretched to fit")
+                } else if (retimedCopy != null && selectRetimedLocally(winner.sub, retimedCopy)) {
                     matchStep(
                         "4· switched to \"${winner.sub.label}\" ${(winner.score * 100).toInt()}% " +
                             "(re-timed against ${retimedCopy.referenceLabel})"
@@ -6182,7 +6291,9 @@ class PlayerViewModel @Inject constructor(
                 // Verdicts are recorded against the family representative that was checked, which
                 // is `decided` — `winner` may be a family member served in its place.
                 val winnerVerdict = aiVerdicts["${decided.sub.provider}|${decided.sub.id}"]
-                if (retimedCopy != null) {
+                if (gmcStretch != null || gmcAlt != null) {
+                    Log.i("SubMatch", "not remembering \"${winner.sub.label}\": GMC stretch or next-candidate pick")
+                } else if (retimedCopy != null) {
                     // The cache stores a subtitle and one offset; a cue-by-cue retime is neither,
                     // and replaying it would need the whole scan anyway. Scan again next time.
                     Log.i("SubMatch", "not remembering \"${winner.sub.label}\": re-timed cue by cue")
@@ -6195,7 +6306,9 @@ class PlayerViewModel @Inject constructor(
                     )
                 }
                 showMatchToast(
-                    if (retimedCopy != null) {
+                    if (gmcStretch != null) {
+                        PlayerMessage.Raw("Ο υπότιτλος «${winner.sub.label}» συγχρονίστηκε (διόρθωση ταχύτητας)")
+                    } else if (retimedCopy != null) {
                         PlayerMessage.Res(
                             R.string.player_match_scored_retimed,
                             listOf(
@@ -9276,6 +9389,12 @@ class PlayerViewModel @Inject constructor(
         // GMC: an AI-measured offset this large, confirmed by the line starts, overrules an alternate reference.
         // GMC: a text track whose line starts sit within this of the disc's image track is timed to the video.
         private const val GMC_IMAGE_FIT_MS = 300L
+        // GMC: before AI, this many further subtitles are measured (GmcFineSync), and one is taken
+        // only with this share of its lines paired — a wrong subtitle pairs by chance ~25-30%.
+        private const val GMC_NEXT_CANDIDATES = 8
+        private const val GMC_NEXT_MIN_PAIR_SHARE = 0.6
+        // ...and, when the scan did not accept it, at least this timing score.
+        private const val GMC_NEXT_MIN_SCORE = 0.5
         private const val GMC_IMAGE_MIN_PAIRED = 0.7
         private const val GMC_ALT_OVERRULE_MIN_MS = 500L
         private const val GMC_ALT_OVERRULE_AGREE_MS = 700L
