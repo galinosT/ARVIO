@@ -2705,30 +2705,72 @@ class PlayerViewModel @Inject constructor(
         gmcAudioAiWatch = null
         gmcAudioAiTarget = null
         gmcAudioAiSource = null
+        gmcAudioAiQueue = emptyList()
+        gmcAudioAiFallback = null
     }
+
+    /** GMC: the English addon subtitles to try for the audio-synced AI source, best first. */
+    private var gmcAudioAiQueue: List<Subtitle> = emptyList()
+    /** A candidate the audio confirmed but then moved: used if no later candidate holds steady. */
+    private var gmcAudioAiFallback: Triple<Subtitle, com.arflix.tv.ui.screens.player.audiosync.SubtitleSyncModel, String>? = null
 
     /** Starts the English-by-audio route; false when it cannot run here. */
     private fun gmcTryEnglishForAi(): Boolean {
         if (userLockedSubtitleKey != null || !aiSubtitleEnabled || aiApiKey.isBlank()) return false
         if (findAiSourceSubtitle(_uiState.value.subtitles) != null || gmcAudioAiTarget != null) return false
         val target = normalizeLanguage(targetSubtitleLangCode)
+        if (target == "en") return false
+        val streamSrc = _uiState.value.selectedStream?.source.orEmpty()
         val english = _uiState.value.subtitles.filter {
-            !it.isEmbedded && !it.isBitmap && !it.isForced && normalizeLanguage(it.lang) == "en" && target != "en" &&
+            !it.isEmbedded && !it.isBitmap && !it.isForced && normalizeLanguage(it.lang) == "en" &&
                 !it.label.contains("forced", ignoreCase = true) && it.url.isNotBlank()
         }
-        val pick = english.firstOrNull { !it.label.contains("SDH", true) && !it.label.contains("[HI]", true) } ?: english.firstOrNull()
-            ?: return false
+        // The release-name match first (the % in the subtitle list): a subtitle made for this very
+        // release is the likeliest to fit the whole episode. Rise of the Nazis S01E02 (Nov 2026):
+        // the first of six in list order was confirmed by the audio in a second and drifted later,
+        // while a well-fitting one sat further down.
+        fun isHearingImpaired(sub: Subtitle) = sub.label.contains("SDH", true) || sub.label.contains("[HI]", true)
+        gmcAudioAiQueue = english
+            .sortedWith(
+                compareByDescending<Subtitle> { weightedSubtitleScore(streamSrc, it.id) }
+                    .thenBy { if (isHearingImpaired(it)) 1 else 0 }
+            )
+            .take(GMC_AUDIO_AI_TRIES)
+        gmcAudioAiFallback = null
+        if (gmcAudioAiQueue.isEmpty()) return false
+        if (!gmcStartEnglishCandidate(0)) {
+            gmcAudioAiQueue = emptyList()
+            return false
+        }
+        showMatchToast(PlayerMessage.Raw("Συγχρονίζω τον αγγλικό υπότιτλο με τον ήχο — μετά ακολουθεί μετάφραση AI"))
+        return true
+    }
+
+    /**
+     * Audio-syncs English candidate [index] and watches it: the audio's first confirmation is not
+     * enough (a subtitle cut for another edit can lock on one scene) — its mapping must still hold
+     * at the playhead [GMC_AUDIO_AI_VERIFY_MS] of playback later. One that moves gives way to the
+     * next candidate; when none holds, the first one confirmed is used as before.
+     */
+    private fun gmcStartEnglishCandidate(index: Int): Boolean {
+        val pick = gmcAudioAiQueue.getOrNull(index) ?: return false
         gmcAudioAiTarget = pick
-        if (!startHearingFallback(pick) { gmcAudioAiFailed() }) {
+        if (!startHearingFallback(pick) { gmcAudioAiFailed(index) }) {
             gmcAudioAiTarget = null
             return false
         }
-        Log.i("SubMatch", "[gmc] no text track for AI — syncing English \"${pick.label}\" by the audio as the AI source")
-        matchStep("4· GMC: no Greek and no built-in text — syncing English \"${pick.label}\" by the audio for AI")
-        showMatchToast(PlayerMessage.Raw("Συγχρονίζω τον αγγλικό υπότιτλο με τον ήχο — μετά ακολουθεί μετάφραση AI"))
+        val streamSrc = _uiState.value.selectedStream?.source.orEmpty()
+        Log.i(
+            "SubMatch",
+            "[gmc] no text track for AI — syncing English #${index + 1}/${gmcAudioAiQueue.size} " +
+                "\"${pick.label}\" (${weightedSubtitleScore(streamSrc, pick.id)}%) by the audio as the AI source"
+        )
+        matchStep("4· GMC: no Greek and no built-in text — syncing English #${index + 1} \"${pick.label}\" by the audio for AI")
         val generation = audioSyncGeneration
         gmcAudioAiWatch?.cancel()
         gmcAudioAiWatch = viewModelScope.launch {
+            var first: com.arflix.tv.ui.screens.player.audiosync.SubtitleSyncModel? = null
+            var firstAtMs = -1L
             while (true) {
                 kotlinx.coroutines.delay(2_000L)
                 if (generation != audioSyncGeneration || gmcAudioAiTarget !== pick || userPickedSubtitle) return@launch
@@ -2736,31 +2778,74 @@ class PlayerViewModel @Inject constructor(
                 if (sync.currentSessionKey != pick.url) return@launch
                 val model = sync.confirmedModel ?: continue
                 val raw = audioSyncRaw ?: return@launch
-                val rewritten = com.arflix.tv.ui.screens.player.audiosync.ArvioAudioSync.retime(raw, model)
-                val served = localizeSubtitle(pick.copy(id = pick.id + RETIMED_SUBTITLE_ID_SUFFIX), rewritten)
-                Log.i("SubMatch", "[gmc] audio confirmed \"${pick.label}\" — AI translation from it")
-                // Stop the audio first (target cleared inside), so its last mapping does not take
-                // the screen back from AI.
-                stopAudioSync()
-                applyAutoSync(pick, null)
-                gmcAudioAiSource = served
-                gmcAudioAiTarget = null
-                selectSubtitle(served, isUserAction = false)
-                activateAiTranslation(isUserAction = false)
-                matchStep("4· GMC: English \"${pick.label}\" confirmed by the audio — AI translation from it")
-                showMatchToast(PlayerMessage.Raw("Ο αγγλικός υπότιτλος συγχρονίστηκε — μετάφραση AI"))
+                val position = gmcPositionMs()
+                val firstModel = first
+                if (firstModel == null || position < firstAtMs) {
+                    // A seek back restarts the wait from here.
+                    if (firstModel == null) Log.i("SubMatch", "[gmc] audio confirmed English #${index + 1} at ${position / 1_000}s — checking it holds")
+                    first = model
+                    firstAtMs = position
+                    continue
+                }
+                // Same playhead, both mappings: a rate correction is not a move, a new offset is.
+                val movedMs = kotlin.math.abs(model.delayUsAt(position * 1_000L) - firstModel.delayUsAt(position * 1_000L)) / 1_000L
+                if (movedMs > GMC_AUDIO_AI_STEADY_MS) {
+                    Log.i("SubMatch", "[gmc] English #${index + 1} moved ${movedMs}ms by ${position / 1_000}s — not steady, next")
+                    if (gmcAudioAiFallback == null) gmcAudioAiFallback = Triple(pick, model, raw)
+                    stopAudioSync()
+                    gmcAudioAiTarget = null
+                    if (!gmcStartEnglishCandidate(index + 1)) gmcUseEnglishFallback()
+                    return@launch
+                }
+                if (position - firstAtMs < GMC_AUDIO_AI_VERIFY_MS) continue
+                gmcUseEnglishForAi(pick, model, raw, index)
                 return@launch
             }
         }
         return true
     }
 
-    private fun gmcAudioAiFailed() {
+    private fun gmcUseEnglishForAi(
+        pick: Subtitle,
+        model: com.arflix.tv.ui.screens.player.audiosync.SubtitleSyncModel,
+        raw: String,
+        index: Int,
+    ) {
+        val rewritten = com.arflix.tv.ui.screens.player.audiosync.ArvioAudioSync.retime(raw, model)
+        val served = localizeSubtitle(pick.copy(id = pick.id + RETIMED_SUBTITLE_ID_SUFFIX), rewritten)
+        Log.i("SubMatch", "[gmc] audio confirmed English #${index + 1} \"${pick.label}\" — AI translation from it")
+        // Stop the audio first (target cleared inside), so its last mapping does not take the
+        // screen back from AI.
+        stopAudioSync()
+        applyAutoSync(pick, null)
+        gmcAudioAiSource = served
+        gmcAudioAiTarget = null
+        gmcAudioAiQueue = emptyList()
+        gmcAudioAiFallback = null
+        selectSubtitle(served, isUserAction = false)
+        activateAiTranslation(isUserAction = false)
+        matchStep("4· GMC: English #${index + 1} \"${pick.label}\" confirmed by the audio — AI translation from it")
+        showMatchToast(PlayerMessage.Raw("Ο αγγλικός υπότιτλος συγχρονίστηκε — μετάφραση AI"))
+    }
+
+    /** No candidate held steady: the first one the audio confirmed, as before the check. */
+    private fun gmcUseEnglishFallback() {
+        val (pick, model, raw) = gmcAudioAiFallback ?: run {
+            Log.i("SubMatch", "[gmc] no English subtitle confirmed by the audio — no AI")
+            matchStep("4· GMC: no English subtitle confirmed by the audio — no AI")
+            gmcAudioAiQueue = emptyList()
+            return
+        }
+        Log.i("SubMatch", "[gmc] none held steady — using the first confirmed \"${pick.label}\"")
+        gmcUseEnglishForAi(pick, model, raw, gmcAudioAiQueue.indexOf(pick).coerceAtLeast(0))
+    }
+
+    private fun gmcAudioAiFailed(index: Int) {
         val pick = gmcAudioAiTarget ?: return
         gmcAudioAiWatch?.cancel()
         gmcAudioAiTarget = null
-        Log.i("SubMatch", "[gmc] the audio could not confirm English \"${pick.label}\" — it stays as is")
-        matchStep("4· GMC: the audio could not confirm English \"${pick.label}\" — no AI")
+        Log.i("SubMatch", "[gmc] the audio could not confirm English #${index + 1} \"${pick.label}\"")
+        if (!gmcStartEnglishCandidate(index + 1)) gmcUseEnglishFallback()
     }
 
     private fun languageCodeToName(code: String): String {
@@ -9529,6 +9614,12 @@ class PlayerViewModel @Inject constructor(
         // GMC: before AI, this many further subtitles are measured (GmcFineSync), and one is taken
         // only with this share of its lines paired — a wrong subtitle pairs by chance ~25-30%.
         private const val GMC_NEXT_CANDIDATES = 8
+        /** English subtitles tried by the audio for the AI source, best release-name match first. */
+        private const val GMC_AUDIO_AI_TRIES = 3
+        /** How long the audio's first confirmation must hold (playback) before AI is built on it. */
+        private const val GMC_AUDIO_AI_VERIFY_MS = 60_000L
+        /** A later mapping this far from the first at the same playhead: the subtitle is not steady. */
+        private const val GMC_AUDIO_AI_STEADY_MS = 400L
         private const val GMC_NEXT_MIN_PAIR_SHARE = 0.6
         // ...and, when the scan did not accept it, at least this timing score.
         private const val GMC_NEXT_MIN_SCORE = 0.5
