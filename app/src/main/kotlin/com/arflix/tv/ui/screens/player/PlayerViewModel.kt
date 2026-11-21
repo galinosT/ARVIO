@@ -3171,7 +3171,7 @@ class PlayerViewModel @Inject constructor(
             gmcPendingSourceReason = if (picked != null && picked !== selected) {
                 "built-in Greek subtitle (#${pickCandidates.indexOf(picked) + 1} of ${pickCandidates.size} checked, same resolution and HDR)"
             } else {
-                "$gmcBaseReason · no built-in Greek in ${pickCandidates.size} checked"
+                "$gmcBaseReason · no built-in Greek in ${pickCandidates.size} checked (${GmcEmbeddedSubtitlePick.lastResults})"
             }
             if (canStartAutoplay()) selectStream(picked ?: selected)
         }

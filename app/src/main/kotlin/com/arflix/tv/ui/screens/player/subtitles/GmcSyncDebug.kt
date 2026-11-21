@@ -27,7 +27,7 @@ object GmcSyncDebug {
     private const val FILE = "gmc_local"
     private const val KEY = "sync_debug"
     private const val MAX_TRACE_CHARS = 16_000
-    private val LOG_TAGS = listOf("SubMatch", "GmcSkip", "SubtitleTranslation")
+    private val LOG_TAGS = listOf("SubMatch", "GmcSkip", "SubtitleTranslation", "GmcEmbeddedSubs")
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
