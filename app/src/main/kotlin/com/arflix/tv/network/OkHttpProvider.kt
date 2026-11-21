@@ -300,7 +300,16 @@ object OkHttpProvider {
     }
 
     private fun buildPlaybackClient(): OkHttpClient {
+        // GMC: the player, the subtitle-track probes, audio sync and seek previews all share this
+        // client (newBuilder() keeps the dispatcher). media3's OkHttpDataSource enqueues its calls,
+        // so OkHttp's default limits (5 per host, 64 in all) can leave a new source queued behind
+        // leftovers from earlier attempts, all on the same debrid host, and it never starts.
+        val dispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 256
+            maxRequestsPerHost = 64
+        }
         return OkHttpClient.Builder()
+            .dispatcher(dispatcher)
             .addInterceptor(customUserAgentInterceptor)
             .connectionPool(playbackConnectionPool)
             .followRedirects(true)

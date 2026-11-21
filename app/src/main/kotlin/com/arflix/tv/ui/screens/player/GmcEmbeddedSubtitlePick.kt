@@ -9,6 +9,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.arflix.tv.data.model.StreamSource
 import com.arflix.tv.network.OkHttpProvider
@@ -103,7 +104,9 @@ internal object GmcEmbeddedSubtitlePick {
         withContext(Dispatchers.Main) {
             val headers = stream.behaviorHints?.proxyHeaders?.request.orEmpty()
             val dataSource = OkHttpDataSource.Factory(OkHttpProvider.playbackClient).setDefaultRequestProperties(headers)
-            val player = ExoPlayer.Builder(context.applicationContext)
+            // No renderers: only the track list is needed, so the probe never takes one of the
+            // box's few hardware video decoders away from the real player.
+            val player = ExoPlayer.Builder(context.applicationContext, RenderersFactory { _, _, _, _, _ -> emptyArray() })
                 .setMediaSourceFactory(DefaultMediaSourceFactory(context.applicationContext).setDataSourceFactory(dataSource))
                 .build()
             try {
