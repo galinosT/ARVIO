@@ -6981,7 +6981,10 @@ class PlayerViewModel @Inject constructor(
         anchor: com.arflix.tv.ui.screens.player.audiosync.ArvioAudioSync.LocalAnchor? = null,
         onFailed: () -> Unit,
     ): Boolean {
-        val sync = audioSync ?: return false
+        // GMC: created here when no scan made it yet — with no target-language candidate at all
+        // (Rise of the Nazis S01E01, Nov 2026) nothing had, so the English-by-audio AI source
+        // never started.
+        val sync = audioSyncOrNull() ?: return false
         if (!hearingAvailable || !sync.canTakeOver || pick.isEmbedded) return false
         // Where AI can run, its timing (from the file's own track) is right, and the audio may
         // only replace it once the model's own measurement confirms the audio's timing. Without
