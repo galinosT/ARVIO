@@ -8126,7 +8126,11 @@ class PlayerViewModel @Inject constructor(
             // Keep the directory bounded; files are ~100KB and keyed stably per subtitle.
             dir.listFiles()?.sortedBy { it.lastModified() }?.dropLast(39)?.forEach { it.delete() }
             val ext = if (raw.trimStart().startsWith("WEBVTT")) "vtt" else "srt"
-            val file = java.io.File(dir, "${"${sub.provider}|${sub.id}".hashCode().toUInt()}.$ext")
+            // GMC: the content is part of the name. A season-pack subtitle keeps the same id in
+            // every episode (Rise of the Nazis "…Cinefeel_2", Nov 2026); one name for both made
+            // E02's retimed English the same URI as E01's, and the cached E01 text came back —
+            // AI then translated E01's lines over E02.
+            val file = java.io.File(dir, "${"${sub.provider}|${sub.id}".hashCode().toUInt()}-${raw.hashCode().toUInt()}.$ext")
             file.writeText(raw)
             sub.copy(url = file.toURI().toString())
         }.getOrDefault(sub)
@@ -9617,7 +9621,7 @@ class PlayerViewModel @Inject constructor(
         /** English subtitles tried by the audio for the AI source, best release-name match first. */
         private const val GMC_AUDIO_AI_TRIES = 6
         /** How long the audio's first confirmation must hold (playback) before AI is built on it. */
-        private const val GMC_AUDIO_AI_VERIFY_MS = 60_000L
+        private const val GMC_AUDIO_AI_VERIFY_MS = 20_000L
         /** A later mapping this far from the first at the same playhead: the subtitle is not steady. */
         private const val GMC_AUDIO_AI_STEADY_MS = 400L
         private const val GMC_NEXT_MIN_PAIR_SHARE = 0.6
