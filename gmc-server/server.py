@@ -21,6 +21,10 @@ Auth: every /v1 request must carry "Authorization: Bearer <GMC_TOKEN>".
                                  sync debug (a box with "Debug συγχρονισμού" on): a title's whole scan
                                  ("play") or a manual fix ("user_ai", "user_pick", "user_delay")
   GET  /v1/debug?limit=20[&format=text]   the most recent debug events, newest first
+  GET  /v1/ratings?type=movie|show&tmdb=123
+                                -> {"ratings": {"tomatoes": "93%", "metacritic": "92", ...}}
+                                 cached per title; MDBList (GMC_MDBLIST_KEY) asked at most once per
+                                 title per TTL, and never past GMC_MDBLIST_DAILY requests a day
   GET  /health                  -> {"ok": true, "lines": n}
 """
 
@@ -44,6 +48,15 @@ MAX_TEXT_LEN = 2000
 MAX_PLAYS = 20000  # older playback lines are dropped beyond this
 PLAY_KINDS = ("ai", "addon", "embedded", "none")
 MAX_DEBUG = 3000  # debug events kept
+MDBLIST_KEY = os.environ.get("GMC_MDBLIST_KEY", "").strip()
+MDBLIST_DAILY = int(os.environ.get("GMC_MDBLIST_DAILY", "800"))  # free tier: 1000/day
+RATINGS_TTL = 7 * 86400          # a title with ratings
+RATINGS_TTL_RECENT = 86400       # released in the last 60 days: scores still move
+RATINGS_TTL_EMPTY = 2 * 86400    # MDBList had nothing (yet)
+RATINGS_TTL_ERROR = 3600         # MDBList failed: try again in an hour
+RATING_SOURCES = ("tomatoes", "popcorn", "metacritic", "letterboxd", "trakt", "tmdb")
+_mdb_day = {"day": "", "count": 0}
+_mdb_lock = threading.Lock()
 MAX_TRACE_LEN = 20000
 
 _lock = threading.Lock()
@@ -71,6 +84,10 @@ def db():
             " id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER NOT NULL, device TEXT NOT NULL,"
             " title TEXT NOT NULL, imdb TEXT, season INTEGER, episode INTEGER, subtitle TEXT NOT NULL,"
             " detail TEXT, memory_pct INTEGER, model TEXT)"
+        )
+        _db.execute(
+            "CREATE TABLE IF NOT EXISTS ratings ("
+            " key TEXT PRIMARY KEY, ratings TEXT NOT NULL, fetched INTEGER NOT NULL, expires INTEGER NOT NULL)"
         )
         _db.execute(
             "CREATE TABLE IF NOT EXISTS debug ("
@@ -227,6 +244,90 @@ def debug_text(events):
     return "\n".join(out) + "\n"
 
 
+def _mdb_budget():
+    """True (and counted) while today's MDBList requests stay under GMC_MDBLIST_DAILY."""
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    with _mdb_lock:
+        if _mdb_day["day"] != today:
+            _mdb_day["day"], _mdb_day["count"] = today, 0
+        if _mdb_day["count"] >= MDBLIST_DAILY:
+            return False
+        _mdb_day["count"] += 1
+        return True
+
+
+def _format_rating(source, item):
+    """MDBList's {"source", "value", "score"} as the badge shows it, or None."""
+    value, score = item.get("value"), item.get("score")
+    def num(x):
+        try:
+            return float(x) if x is not None and x != "" else None
+        except (TypeError, ValueError):
+            return None
+    v, sc = num(value), num(score)
+    if source in ("tomatoes", "popcorn"):
+        n = sc if sc is not None else v
+        return "%d%%" % round(n) if n is not None and n > 0 else None
+    if source == "metacritic":
+        n = v if v is not None else sc
+        return "%d" % round(n) if n is not None and n > 0 else None
+    if source == "letterboxd":
+        return ("%.1f" % v) if v is not None and v > 0 else None
+    n = v if v is not None else (sc / 10.0 if sc is not None else None)
+    return ("%.1f" % n) if n is not None and n > 0 else None
+
+
+def _fetch_ratings(media_type, tmdb_id):
+    """(ratings, released_recently) from MDBList; raises on a failed request."""
+    import urllib.request
+    url = "https://api.mdblist.com/tmdb/%s/%d?apikey=%s" % (media_type, tmdb_id, MDBLIST_KEY)
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "gmc-server"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    out = {}
+    for item in data.get("ratings") or []:
+        source = str(item.get("source") or "").lower().strip()
+        if source in RATING_SOURCES and source not in out:
+            text = _format_rating(source, item)
+            if text:
+                out[source] = text
+    recent = False
+    released = str(data.get("released") or data.get("released_digital") or "")[:10]
+    try:
+        recent = time.time() - time.mktime(time.strptime(released, "%Y-%m-%d")) < 60 * 86400
+    except ValueError:
+        pass
+    return out, recent
+
+
+def get_ratings(media_type, tmdb_id):
+    """Cached ratings; MDBList only when missing or expired and within today's budget."""
+    key = "%s:%d" % (media_type, tmdb_id)
+    now = int(time.time())
+    with _lock:
+        row = db().execute("SELECT ratings, expires FROM ratings WHERE key = ?", (key,)).fetchone()
+    if row and row[1] > now:
+        return json.loads(row[0]), "cache"
+    if not MDBLIST_KEY or not _mdb_budget():
+        return (json.loads(row[0]) if row else {}), "stale" if row else "none"
+    try:
+        ratings, recent = _fetch_ratings(media_type, tmdb_id)
+        ttl = RATINGS_TTL_EMPTY if not ratings else (RATINGS_TTL_RECENT if recent else RATINGS_TTL)
+    except Exception as e:  # network, HTTP error, odd payload
+        sys.stderr.write("mdblist %s: %s\n" % (key, e))
+        if row:
+            return json.loads(row[0]), "stale"
+        ratings, ttl = {}, RATINGS_TTL_ERROR
+    with _lock:
+        conn = db()
+        conn.execute(
+            "INSERT OR REPLACE INTO ratings (key, ratings, fetched, expires) VALUES (?, ?, ?, ?)",
+            (key, json.dumps(ratings), now, now + ttl),
+        )
+        conn.commit()
+    return ratings, "mdblist"
+
+
 def recent_plays(limit):
     with _lock:
         rows = db().execute(
@@ -334,6 +435,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return None
             return self.reply(200, {"plays": plays})
+        if url.path == "/v1/ratings":
+            q = parse_qs(url.query)
+            media_type = q.get("type", [""])[0]
+            try:
+                tmdb_id = int(q.get("tmdb", [""])[0])
+            except ValueError:
+                return self.reply(400, {"error": "bad tmdb"})
+            if media_type not in ("movie", "show") or tmdb_id <= 0:
+                return self.reply(400, {"error": "type movie|show and tmdb required"})
+            ratings, origin = get_ratings(media_type, tmdb_id)
+            return self.reply(200, {"ratings": ratings, "from": origin})
         if url.path == "/v1/debug":
             q = parse_qs(url.query)
             try:

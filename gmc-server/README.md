@@ -44,6 +44,19 @@ One line per playback, newest first: time (Athens), box (its Android "Device nam
 title, `ai` / `addon` / `embedded` / `none`, and details. Without `format=text` it is JSON.
 Only the latest 20,000 lines are kept.
 
+## Ratings (home screen)
+
+Rotten Tomatoes and Metacritic next to IMDb on the GMC home screen come from here: the server asks
+MDBList once per title and keeps the answer (7 days; 1 day for titles released in the last 60 days),
+so the boxes never spend MDBList's daily allowance. Needs in `.env`:
+
+```
+GMC_MDBLIST_KEY=<your MDBList API key>   # mdblist.com → Preferences → API key
+GMC_MDBLIST_DAILY=800                     # optional; free tier allows 1000 requests a day
+```
+
+Without the key the endpoint answers with no ratings and the boxes show only IMDb.
+
 ## Sync debug
 
 A box with **Settings → AI subtitles → Debug συγχρονισμού** on also sends, per title, the whole

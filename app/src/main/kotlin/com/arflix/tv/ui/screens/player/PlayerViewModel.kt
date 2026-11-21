@@ -2687,7 +2687,78 @@ class PlayerViewModel @Inject constructor(
             targetSubtitleLangCode.ifBlank { _uiState.value.aiTargetLanguageName },
             untranslatableSourceKeys,
             ::normalizeLanguage
-        )
+        ) ?: gmcAudioAiSource?.takeIf { SubtitleSelectionPolicy.key(it) !in untranslatableSourceKeys }
+
+    // GMC: a file with no text track of its own (Top Gear Middle East Special x265-IPSO, Nov 2026:
+    // no built-in subtitles, only an English one from SubDL) had no AI translation at all. The best
+    // English addon subtitle is synced by the audio instead; once the audio has CONFIRMED its timing,
+    // a copy re-timed to it becomes the AI source. Unconfirmed, nothing changes.
+    @Volatile private var gmcAudioAiSource: Subtitle? = null
+    private var gmcAudioAiTarget: Subtitle? = null
+    private var gmcAudioAiWatch: kotlinx.coroutines.Job? = null
+
+    private fun gmcResetAudioAi() {
+        gmcAudioAiWatch?.cancel()
+        gmcAudioAiWatch = null
+        gmcAudioAiTarget = null
+        gmcAudioAiSource = null
+    }
+
+    /** Starts the English-by-audio route; false when it cannot run here. */
+    private fun gmcTryEnglishForAi(): Boolean {
+        if (userLockedSubtitleKey != null || !aiSubtitleEnabled || aiApiKey.isBlank()) return false
+        if (findAiSourceSubtitle(_uiState.value.subtitles) != null || gmcAudioAiTarget != null) return false
+        val target = normalizeLanguage(targetSubtitleLangCode)
+        val english = _uiState.value.subtitles.filter {
+            !it.isEmbedded && !it.isBitmap && !it.isForced && normalizeLanguage(it.lang) == "en" && target != "en" &&
+                !it.label.contains("forced", ignoreCase = true) && it.url.isNotBlank()
+        }
+        val pick = english.firstOrNull { !it.label.contains("SDH", true) && !it.label.contains("[HI]", true) } ?: english.firstOrNull()
+            ?: return false
+        gmcAudioAiTarget = pick
+        if (!startHearingFallback(pick) { gmcAudioAiFailed() }) {
+            gmcAudioAiTarget = null
+            return false
+        }
+        Log.i("SubMatch", "[gmc] no text track for AI — syncing English \"${pick.label}\" by the audio as the AI source")
+        matchStep("4· GMC: no Greek and no built-in text — syncing English \"${pick.label}\" by the audio for AI")
+        showMatchToast(PlayerMessage.Raw("Συγχρονίζω τον αγγλικό υπότιτλο με τον ήχο — μετά ακολουθεί μετάφραση AI"))
+        val generation = audioSyncGeneration
+        gmcAudioAiWatch?.cancel()
+        gmcAudioAiWatch = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(2_000L)
+                if (generation != audioSyncGeneration || gmcAudioAiTarget !== pick || userPickedSubtitle) return@launch
+                val sync = audioSync ?: return@launch
+                if (sync.currentSessionKey != pick.url) return@launch
+                val model = sync.confirmedModel ?: continue
+                val raw = audioSyncRaw ?: return@launch
+                val rewritten = com.arflix.tv.ui.screens.player.audiosync.ArvioAudioSync.retime(raw, model)
+                val served = localizeSubtitle(pick.copy(id = pick.id + RETIMED_SUBTITLE_ID_SUFFIX), rewritten)
+                Log.i("SubMatch", "[gmc] audio confirmed \"${pick.label}\" — AI translation from it")
+                // Stop the audio first (target cleared inside), so its last mapping does not take
+                // the screen back from AI.
+                stopAudioSync()
+                applyAutoSync(pick, null)
+                gmcAudioAiSource = served
+                gmcAudioAiTarget = null
+                selectSubtitle(served, isUserAction = false)
+                activateAiTranslation(isUserAction = false)
+                matchStep("4· GMC: English \"${pick.label}\" confirmed by the audio — AI translation from it")
+                showMatchToast(PlayerMessage.Raw("Ο αγγλικός υπότιτλος συγχρονίστηκε — μετάφραση AI"))
+                return@launch
+            }
+        }
+        return true
+    }
+
+    private fun gmcAudioAiFailed() {
+        val pick = gmcAudioAiTarget ?: return
+        gmcAudioAiWatch?.cancel()
+        gmcAudioAiTarget = null
+        Log.i("SubMatch", "[gmc] the audio could not confirm English \"${pick.label}\" — it stays as is")
+        matchStep("4· GMC: the audio could not confirm English \"${pick.label}\" — no AI")
+    }
 
     private fun languageCodeToName(code: String): String {
         return when (code.lowercase().trim()) {
@@ -3387,6 +3458,7 @@ class PlayerViewModel @Inject constructor(
             gmcPendingSourceReason = null
             val previousUrl = _uiState.value.selectedStream?.url
             val changed = stream.url.isNullOrBlank() || stream.url != previousUrl
+            if (changed) gmcResetAudioAi()
             if (pending != null || changed) {
                 gmcSourceReason = pending ?: "other (resume, link or provided source)"
                 gmcSendDebug("source", "playing ${gmcSourceLabel(stream)} — ${gmcSourceReason}")
@@ -4260,7 +4332,7 @@ class PlayerViewModel @Inject constructor(
      */
     private fun tryAiFallbackAfterScan(): Boolean {
         if (userLockedSubtitleKey != null || !aiSubtitleEnabled || aiApiKey.isBlank()) return false
-        if (findAiSourceSubtitle(_uiState.value.subtitles) == null) return false
+        if (findAiSourceSubtitle(_uiState.value.subtitles) == null) return gmcTryEnglishForAi()
         activateAiTranslation(isUserAction = false)
         showMatchToast(PlayerMessage.Res(R.string.player_match_none_using_ai))
         return true

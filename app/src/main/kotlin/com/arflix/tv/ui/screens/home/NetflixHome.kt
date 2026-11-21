@@ -819,6 +819,13 @@ private fun NetflixMetaLine(item: MediaItem, fontSize: Int) {
                 textShadow = NetflixTextShadow
             )
         }
+        // GMC: Rotten Tomatoes and Metacritic from the gmc-server, after the IMDb rating.
+        com.arflix.tv.ui.components.GmcExtraRatings(
+            mediaType = item.mediaType,
+            tmdbId = item.id,
+            fontSize = fontSize,
+            textShadow = NetflixTextShadow,
+        )
     }
 }
 

@@ -129,6 +129,9 @@ export function CatalogsSection() {
         ? `${sourceLabel("collections")} · ${translateUi("{value0}/{value1} items shown", { value0: enabledCount, value1: total })}`
         : `${sourceLabel("collections")} · ${translateUi("Collection rail")}`;
     }
+    // GMC: a WeTrakr list row is stored as sourceType "simkl" for the TV; label it as what it is.
+    const weTrakr = catalog.sourceRef?.match(/^wetrakr_list:(.+)$/i);
+    if (weTrakr) return `WeTrakr · ${weTrakr[1]}`;
     const detail = catalog.sourceUrl || catalog.endpoint || catalog.addonCatalogId;
     return `${sourceLabel(homeRowSource(catalog))}${detail ? ` · ${detail}` : ""}`;
   };
