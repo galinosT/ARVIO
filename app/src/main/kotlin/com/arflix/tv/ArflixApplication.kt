@@ -112,6 +112,10 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
                     .putString("last_crash_version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                     .putBoolean("has_pending_crash_report", true)
                     .commit()
+                // GMC: the whole stack for the sync-debug log (sent on the next start).
+                getSharedPreferences("gmc_local", android.content.Context.MODE_PRIVATE).edit()
+                    .putString("gmc_crash_stack", "thread=${thread.name}\n" + throwable.stackTraceToString().take(12_000))
+                    .commit()
             } catch (_: Throwable) {
             } finally {
                 defaultHandler?.uncaughtException(thread, throwable)
@@ -122,6 +126,9 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
         super.onCreate()
         instance = this
         if (crashProcess) return
+        appScope.launch(Dispatchers.IO) {
+            runCatching { com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug.sendLastExits(this@ArflixApplication) }
+        }
 
         // Initialize global DNS provider and user agent from DataStore before network calls.
         appScope.launch(Dispatchers.IO) {

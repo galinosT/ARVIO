@@ -40,6 +40,9 @@ internal class PlaybackStartupTrace(private val clock: () -> Long = SystemClock:
 
     @Synchronized fun preparing() { preparedAt = clock() }
 
+    /** GMC: the numbers so far, without closing the sample. */
+    @Synchronized fun peek(): Sample = sample.copy()
+
     @Synchronized fun finish(): Sample {
         if (!finished) {
             sample.prepareToFrameMs = preparedAt?.let { (clock() - it).coerceAtLeast(0L) } ?: 0

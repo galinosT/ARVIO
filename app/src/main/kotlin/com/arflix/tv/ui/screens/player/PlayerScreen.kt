@@ -3501,6 +3501,22 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
                     // Distinguish the two failure shapes: still BUFFERING = the stream is too slow
                     // to load (uncached/slow host); READY without a frame = the device couldn't
                     // decode the video (codec/resolution). The user sees which it is.
+                    runCatching {
+                        val video = exoPlayer.videoFormat
+                        val audio = exoPlayer.audioFormat
+                        val host = runCatching { android.net.Uri.parse(uiState.selectedStreamUrl).host }.getOrNull()
+                        viewModel.gmcDebugEvent(
+                            "startup-timeout",
+                            "state=${exoPlayer.playbackState} loading=${exoPlayer.isLoading} " +
+                                "buffered=${exoPlayer.totalBufferedDuration}ms elapsed=${startupBufferDuration}ms " +
+                                "heavy=$isHeavyStartupSource failovers=$autoAdvanceAttempts host=$host " +
+                                "video=${video?.sampleMimeType}/${video?.codecs}/${video?.width}x${video?.height} " +
+                                "audio=${audio?.sampleMimeType}/${audio?.channelCount}ch " +
+                                "error=${exoPlayer.playerError?.errorCodeName} " +
+                                "net[${startupTrace.peek().summary()}] " +
+                                "stream=${uiState.selectedStream?.let { "${it.quality} · ${it.size}" }}"
+                        )
+                    }
                     val startupReason = if (exoPlayer.playbackState == Player.STATE_READY) {
                         context.getString(R.string.player_fail_device_cannot_play)
                     } else {

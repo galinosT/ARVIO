@@ -2189,6 +2189,9 @@ class PlayerViewModel @Inject constructor(
     // GMC: "Debug συγχρονισμού" (GmcSyncDebug) — the scan of this title and every manual fix.
     @Volatile private var gmcDebugSinceMs = 0L
 
+    /** GMC: a debug event from the player screen (startup failures). */
+    fun gmcDebugEvent(event: String, detail: String) = gmcSendDebug(event, detail)
+
     private fun gmcSendDebug(event: String, detail: String) {
         val debug = com.arflix.tv.ui.screens.player.subtitles.GmcSyncDebug
         if (!debug.isOn(context) || currentMediaId == 0) return

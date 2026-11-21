@@ -91,4 +91,60 @@ object GmcSyncDebug {
             }.onFailure { Log.w(TAG, "send failed: ${it.message}") }
         }
     }
+
+    /**
+     * After a crash, an ANR or a kill by the system: what ended the previous run, sent once on
+     * the next start while the switch is on. Java crashes carry their stack (kept by the app's
+     * crash handler); ANRs and native crashes carry the system's own trace (Android 11+).
+     */
+    suspend fun sendLastExits(context: Context) {
+        if (!isOn(context)) return
+        val prefs = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val device = GmcPlayLog.deviceLabel(context)
+        val version = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+        prefs.getString("gmc_crash_stack", null)?.let { stack ->
+            send(context, JSONObject().apply {
+                put("device", device); put("title", "GMC $version"); put("event", "crash")
+                put("detail", stack.lineSequence().drop(1).firstOrNull().orEmpty().take(300))
+                put("trace", stack)
+            })
+            prefs.edit().remove("gmc_crash_stack").apply()
+        }
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val lastSeen = prefs.getLong("gmc_exit_seen", 0L)
+        val exits = runCatching { am.getHistoricalProcessExitReasons(context.packageName, 0, 5) }.getOrNull().orEmpty()
+            .filter { it.timestamp > maxOf(lastSeen, System.currentTimeMillis() - 12 * 3_600_000L) }
+        if (exits.isEmpty()) return
+        prefs.edit().putLong("gmc_exit_seen", exits.maxOf { it.timestamp }).apply()
+        val interesting = setOf(
+            android.app.ApplicationExitInfo.REASON_ANR,
+            android.app.ApplicationExitInfo.REASON_CRASH,
+            android.app.ApplicationExitInfo.REASON_CRASH_NATIVE,
+            android.app.ApplicationExitInfo.REASON_LOW_MEMORY,
+            android.app.ApplicationExitInfo.REASON_SIGNALED,
+        )
+        exits.filter { it.reason in interesting }.forEach { exit ->
+            val trace = runCatching {
+                exit.traceInputStream?.bufferedReader()?.use { it.readText() }
+            }.getOrNull().orEmpty()
+            val clock = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(exit.timestamp))
+            send(context, JSONObject().apply {
+                put("device", device); put("title", "GMC $version"); put("event", "exit-" + exitName(exit.reason))
+                put("detail", "at $clock · ${exit.description.orEmpty()} · pss=${exit.pss / 1024}MB rss=${exit.rss / 1024}MB")
+                put("trace", if (trace.length <= MAX_TRACE_CHARS) trace else trace.take(MAX_TRACE_CHARS))
+            })
+        }
+    }
+
+    private fun exitName(reason: Int): String = when (reason) {
+        android.app.ApplicationExitInfo.REASON_ANR -> "anr"
+        android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+        android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native"
+        android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "lowmem"
+        android.app.ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+        else -> reason.toString()
+    }
 }
