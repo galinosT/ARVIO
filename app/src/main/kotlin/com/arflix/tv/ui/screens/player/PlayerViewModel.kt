@@ -9615,7 +9615,7 @@ class PlayerViewModel @Inject constructor(
         // only with this share of its lines paired — a wrong subtitle pairs by chance ~25-30%.
         private const val GMC_NEXT_CANDIDATES = 8
         /** English subtitles tried by the audio for the AI source, best release-name match first. */
-        private const val GMC_AUDIO_AI_TRIES = 3
+        private const val GMC_AUDIO_AI_TRIES = 6
         /** How long the audio's first confirmation must hold (playback) before AI is built on it. */
         private const val GMC_AUDIO_AI_VERIFY_MS = 60_000L
         /** A later mapping this far from the first at the same playhead: the subtitle is not steady. */
