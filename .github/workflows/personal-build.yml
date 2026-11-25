@@ -15,7 +15,8 @@ on:
         type: boolean
         default: false
   push:
-    branches: [galinos]
+    # galinos -> GMC; gmc-test -> GMC Test (pre-release), for trying changes before they reach galinos.
+    branches: [galinos, gmc-test]
     paths-ignore: ["**.md", "docs/**", "web/**", "netlify-*/**"]
 
 concurrency:
@@ -124,8 +125,8 @@ jobs:
         id: personal
         env:
           PERSONAL_BUILD: ${{ github.run_number }}
-          PERSONAL_PACKAGE: ${{ inputs.cloud_test && 'com.galinos.gmc.cloudtest' || 'com.galinos.gmc' }}
-          PERSONAL_APP_NAME: ${{ inputs.cloud_test && 'GMC Test' || 'GMC' }}
+          PERSONAL_PACKAGE: ${{ (inputs.cloud_test || github.ref_name == 'gmc-test') && 'com.galinos.gmc.cloudtest' || 'com.galinos.gmc' }}
+          PERSONAL_APP_NAME: ${{ (inputs.cloud_test || github.ref_name == 'gmc-test') && 'GMC Test' || 'GMC' }}
           PERSONAL_VERSION_BASE: "2.4"
         run: python3 personal/personalize.py
 
@@ -141,7 +142,7 @@ jobs:
             echo "::error::Expected one APK, found ${#apks[@]}: ${apks[*]}"
             exit 1
           fi
-          out="gmc-${{ inputs.cloud_test && 'test-' || '' }}${{ steps.personal.outputs.version }}.apk"
+          out="gmc-${{ (inputs.cloud_test || github.ref_name == 'gmc-test') && 'test-' || '' }}${{ steps.personal.outputs.version }}.apk"
           cp "${apks[0]}" "$out"
           # Fail if the APK ended up debug-signed: it could never update the installed app.
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
@@ -158,7 +159,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.personal.outputs.version }}
           APK: ${{ steps.apk.outputs.file }}
-          CLOUD_TEST: ${{ inputs.cloud_test && 'true' || 'false' }}
+          CLOUD_TEST: ${{ (inputs.cloud_test || github.ref_name == 'gmc-test') && 'true' || 'false' }}
         run: |
           if [ "$CLOUD_TEST" = "true" ]; then
             # A pre-release, so Obtainium and the in-app updater of the normal GMC never pick it.

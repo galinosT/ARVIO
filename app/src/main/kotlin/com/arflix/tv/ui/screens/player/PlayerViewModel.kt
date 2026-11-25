@@ -2685,7 +2685,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun findAiSourceSubtitle(subtitles: List<Subtitle>): Subtitle? =
-        SubtitleSelectionPolicy.aiSource(
+        gmcManualAiSource ?: SubtitleSelectionPolicy.aiSource(
             subtitles,
             targetSubtitleLangCode.ifBlank { _uiState.value.aiTargetLanguageName },
             untranslatableSourceKeys,
@@ -2700,7 +2700,72 @@ class PlayerViewModel @Inject constructor(
     private var gmcAudioAiTarget: Subtitle? = null
     private var gmcAudioAiWatch: kotlinx.coroutines.Job? = null
 
+    // GMC: an English subtitle the user tested by eye and sent for AI translation themselves —
+    // its timing (auto shift + their manual delay) baked into a local copy. It overrides every
+    // automatic AI source for the rest of this playback.
+    @Volatile private var gmcManualAiSource: Subtitle? = null
+
+    /** GMC: whether the subtitle on screen can be sent for AI translation by hand (English addon). */
+    fun gmcCanTranslateSelected(): Boolean {
+        val state = _uiState.value
+        val sub = state.selectedSubtitle ?: return false
+        return aiSubtitleEnabled && aiApiKey.isNotBlank() && !state.isAiTranslating &&
+            !sub.isEmbedded && !sub.isBitmap && normalizeLanguage(sub.lang) == "en" &&
+            normalizeLanguage(targetSubtitleLangCode) != "en"
+    }
+
+    /**
+     * GMC: the user tested the English subtitle on screen and sends it for AI translation with the
+     * timing they see: any automatic shift plus [manualDelayMs] are written into a local copy, which
+     * becomes the AI source. [onStarted] runs once translation has started (the screen then zeroes
+     * its manual delay, now part of the copy). Whatever AI was on before is replaced only now.
+     */
+    fun gmcTranslateSelected(manualDelayMs: Long, onStarted: () -> Unit) {
+        if (!gmcCanTranslateSelected()) return
+        val state = _uiState.value
+        val sub = state.selectedSubtitle ?: return
+        val key = "${sub.provider}|${sub.id}"
+        val autoMs = state.autoSync?.takeIf { state.autoSyncSubtitleKey == key }?.offsetMs ?: 0L
+        val totalMs = autoMs + manualDelayMs
+        val streamUrl = state.selectedStreamUrl
+        viewModelScope.launch {
+            val raw = SubtitleSyncMatcher.loadRaw(sub.url, sub.lang)
+                ?: preloadedCopyFor(sub)?.url?.let { SubtitleSyncMatcher.loadRaw(it, sub.lang) }
+            if (_uiState.value.selectedStreamUrl != streamUrl) return@launch
+            if (raw == null) {
+                showMatchToast(PlayerMessage.Raw("Δεν διαβάστηκε ο υπότιτλος «${sub.label}» — δοκίμασε άλλον"))
+                return@launch
+            }
+            val shifted = withContext(Dispatchers.Default) { SubtitleSyncMatcher.shiftTimestamps(raw, totalMs) }
+            val baseId = sub.id.removeSuffix(RETIMED_SUBTITLE_ID_SUFFIX).removeSuffix(GMC_MANUAL_AI_ID_SUFFIX)
+            val served = localizeSubtitle(sub.copy(id = baseId + GMC_MANUAL_AI_ID_SUFFIX), shifted)
+            Log.i(
+                "SubMatch",
+                "[gmc] manual AI source \"${sub.label}\": auto ${autoMs}ms + manual ${manualDelayMs}ms = ${totalMs}ms baked in"
+            )
+            gmcSendDebug("user_manual_ai", "\"${sub.label}\" sent for AI with ${totalMs}ms (auto ${autoMs} + manual ${manualDelayMs})")
+            stopAudioSync()
+            gmcAudioAiWatch?.cancel()
+            gmcAudioAiTarget = null
+            gmcAudioAiQueue = emptyList()
+            applyAutoSync(null, null)
+            gmcManualAiSource = served
+            aiSourceSubtitle = served
+            // Same order as the English-by-audio route (gmcUseEnglishForAi): load the copy, then AI.
+            selectSubtitle(served, isUserAction = true)
+            activateAiTranslation(isUserAction = true)
+            onStarted()
+            showMatchToast(
+                PlayerMessage.Raw(
+                    "Μετάφραση AI από «${sub.label}»" +
+                        (if (totalMs != 0L) " (${formatMatchOffset(totalMs)})" else "")
+                )
+            )
+        }
+    }
+
     private fun gmcResetAudioAi() {
+        gmcManualAiSource = null
         gmcAudioAiWatch?.cancel()
         gmcAudioAiWatch = null
         gmcAudioAiTarget = null
@@ -5279,6 +5344,13 @@ class PlayerViewModel @Inject constructor(
             // Set when the reference is a TEXT track read through the index without a text
             // reference in the player (the forced-flagged fallback) — the retimer may use it.
             var textIndexReference = false
+            // GMC: the reference came from the container index with no text, so the AI could never
+            // check a candidate's dialogue — "not confirmed" then means "could not be checked".
+            var gmcNoTextReference = false
+            // GMC: every confident, consistent retime per subtitle (by cue signature), one per
+            // reference track — independent tracks agreeing on the same map stand in for the AI
+            // check when there is no text to check against (Operation Mincemeat, Nov 2026).
+            val gmcRetimeFits = HashMap<Pair<Int, Int>, MutableList<com.arflix.tv.ui.screens.player.subtitles.AutoSyncTimelineRetimeResult>>()
             // Set when the reference track turned out to hold no dialogue (see runInPlayerReference).
             // AI translation from it produces nothing either, so the verdict replaces the AI stopgap.
             var referenceNotDialogue = false
@@ -5342,6 +5414,7 @@ class PlayerViewModel @Inject constructor(
                         "2· reference from container index (${indexedRefs.size} cues) — " +
                             "comparing ${loaded.size} subtitles…"
                     )
+                    gmcNoTextReference = true
                     Log.i(
                         "SubMatch",
                         "container-index reference carries no text — scoring all ${loaded.size} " +
@@ -5528,6 +5601,7 @@ class PlayerViewModel @Inject constructor(
                 } -> {
                     loaded = loadAll()
                     useContainerIndexLabel()
+                    gmcNoTextReference = true
                     Log.i(
                         "SubMatch",
                         "no usable text track in the player — container index supplies the reference by timing shape " +
@@ -5757,6 +5831,7 @@ class PlayerViewModel @Inject constructor(
                             continue
                         }
                         val key = signature(cues)
+                        gmcRetimeFits.getOrPut(key) { ArrayList() }.add(result)
                         val held = bestBySignature[key]
                         // Two references that place the same subtitle more than 300ms apart cannot
                         // both be right; lets the one whose paired lines fit tighter win
@@ -6400,7 +6475,25 @@ class PlayerViewModel @Inject constructor(
                 // line, so no AI check could run; the retimer called its map "confident" and it was
                 // served seconds out — over an AI translation that was in sync. Unconfirmed, it
                 // does not replace AI.
-                val gmcRetimeUnconfirmed = winner.retime?.uniform == false &&
+                // GMC: Operation Mincemeat (Nov 2026) — the reference had no text, so no AI check
+                // could ever run, and the rule above threw out a re-timing that was right to the end
+                // (+10.6s at a 23.976/24 rate on all three English tracks, quality 0.88–0.91).
+                // When the check was impossible rather than failed, independent reference tracks
+                // agreeing on the same map are the confirmation.
+                val gmcRetimeAgreement = if (winner.retime?.uniform == false && gmcNoTextReference && gmcCues != null) {
+                    gmcRetimeAgreementCount(gmcRetimeFits[gmcCues.size to gmcCues.map { it.startMs }.hashCode()], winner.retime.result)
+                } else 0
+                val gmcRetimeAgreed = gmcRetimeAgreement >= GMC_RETIME_AGREE_MIN_REFS
+                if (winner.retime?.uniform == false && gmcNoTextReference) {
+                    Log.i(
+                        "SubMatch",
+                        "[gmc] \"${winner.sub.label}\": no-text reference, $gmcRetimeAgreement reference tracks agree on the re-timing " +
+                            "(scale ${"%.6f".format(winner.retime.result.alignmentScale)}, intercept ${winner.retime.result.alignmentInterceptMs.toLong()}ms, " +
+                            "served shift per part ${com.arflix.tv.ui.screens.player.subtitles.RetimeConsistency.placementProfile(winner.retime.result)}ms)" +
+                            if (gmcRetimeAgreed) " -> accepted without the AI check" else " -> not enough agreement"
+                    )
+                }
+                val gmcRetimeUnconfirmed = winner.retime?.uniform == false && !gmcRetimeAgreed &&
                     aiVerdicts["${gmcChecked.sub.provider}|${gmcChecked.sub.id}"] != AiVerdict.CONFIRMED
                 if (gmcRetimeUnconfirmed) {
                     Log.i("SubMatch", "[gmc] \"${winner.sub.label}\": re-timed line by line but not confirmed by the AI")
@@ -7425,6 +7518,20 @@ class PlayerViewModel @Inject constructor(
      * One number for a confident retimer result —  mostly how much of
      * the subtitle found a partner, then how cheap and how 1:1 the pairing was.
      */
+    /**
+     * GMC: how many reference tracks produced a confident re-timing of the same subtitle that
+     * matches [chosen] (intercept within 300ms, same rate) at retime quality ≥
+     * [GMC_RETIME_AGREE_MIN_QUALITY]; [chosen] itself counts when it meets the quality bar.
+     */
+    private fun gmcRetimeAgreementCount(
+        fits: List<com.arflix.tv.ui.screens.player.subtitles.AutoSyncTimelineRetimeResult>?,
+        chosen: com.arflix.tv.ui.screens.player.subtitles.AutoSyncTimelineRetimeResult,
+    ): Int = fits.orEmpty().count { r ->
+        retimeQuality(r) >= GMC_RETIME_AGREE_MIN_QUALITY &&
+            kotlin.math.abs(r.alignmentInterceptMs - chosen.alignmentInterceptMs) <= GMC_RETIME_AGREE_INTERCEPT_MS &&
+            kotlin.math.abs(r.alignmentScale - chosen.alignmentScale) <= GMC_RETIME_AGREE_SCALE
+    }
+
     private fun retimeQuality(result: com.arflix.tv.ui.screens.player.subtitles.AutoSyncTimelineRetimeResult): Double =
         result.targetCoverage * 0.42 +
             result.referenceCoverage * 0.15 +
@@ -9627,6 +9734,13 @@ class PlayerViewModel @Inject constructor(
         private const val GMC_NEXT_MIN_PAIR_SHARE = 0.6
         // ...and, when the scan did not accept it, at least this timing score.
         private const val GMC_NEXT_MIN_SCORE = 0.5
+        // GMC: a no-text reference re-timing is taken without the AI check when this many reference
+        // tracks agree on it (see gmcRetimeAgreementCount).
+        private const val GMC_MANUAL_AI_ID_SUFFIX = "#gmc-manual"
+        private const val GMC_RETIME_AGREE_MIN_REFS = 2
+        private const val GMC_RETIME_AGREE_MIN_QUALITY = 0.85
+        private const val GMC_RETIME_AGREE_INTERCEPT_MS = 300.0
+        private const val GMC_RETIME_AGREE_SCALE = 0.0005
         private const val GMC_IMAGE_MIN_PAIRED = 0.7
         private const val GMC_ALT_OVERRULE_MIN_MS = 500L
         private const val GMC_ALT_OVERRULE_AGREE_MS = 700L
