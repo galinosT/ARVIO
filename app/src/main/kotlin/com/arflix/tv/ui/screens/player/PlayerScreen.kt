@@ -714,7 +714,7 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
     var subtitlePanelFocus by remember { mutableIntStateOf(0) } // 0=lang panel, 1=track panel
     // In-player subtitle settings panel state
     var showSubtitleSettings by remember { mutableStateOf(false) }
-    var subtitleSettingsRow by remember { mutableIntStateOf(0) }  // 0=Delay, 1=Size, 2=Vertical
+    var subtitleSettingsRow by remember { mutableIntStateOf(0) }  // 0=Delay, 1=Size, 2=Vertical (GMC: 3–5 manual AI)
     var subtitleSyncOffsetMs by remember { mutableLongStateOf(0L) }
     var subtitleSizePct by remember { mutableIntStateOf(uiState.subtitleSizePct) }
     var subtitleVerticalPct by remember { mutableIntStateOf(uiState.subtitleVerticalPct) }
@@ -3229,6 +3229,26 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
         }
     }
 
+    // GMC: manual "test the English subtitle, then send it for AI translation" — rows 3–5 of the
+    // subtitle settings panel, shown while an English addon subtitle is on screen.
+    val gmcCanTranslateSelected = remember(uiState.selectedSubtitle, uiState.isAiTranslating) {
+        viewModel.gmcCanTranslateSelected()
+    }
+    LaunchedEffect(gmcCanTranslateSelected) {
+        if (!gmcCanTranslateSelected && subtitleSettingsRow > 2) subtitleSettingsRow = 2
+    }
+    val gmcSubtitleSettingsAction: (Int) -> Unit = { row ->
+        when (row) {
+            GMC_SETTINGS_ROW_MIDDLE -> if (duration > 0L) playerEngine.seekTo(duration / 2)
+            GMC_SETTINGS_ROW_END -> if (duration > 0L) playerEngine.seekTo(duration * 9 / 10)
+            GMC_SETTINGS_ROW_TRANSLATE -> viewModel.gmcTranslateSelected(subtitleSyncOffsetMs) {
+                subtitleSyncOffsetMs = 0L
+                showSubtitleSettings = false
+                subtitleSettingsRow = 0
+            }
+        }
+    }
+
     // Sync in-player subtitle delay with the renderer factory (microseconds = ms * 1000)
     // GMC: a manual delay is a manual fix — reported (Debug συγχρονισμού) once it settles.
     LaunchedEffect(subtitleSyncOffsetMs) {
@@ -4046,7 +4066,13 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
                                 true
                             }
                             Key.DirectionDown -> {
-                                subtitleSettingsRow = (subtitleSettingsRow + 1).coerceAtMost(2)
+                                subtitleSettingsRow = (subtitleSettingsRow + 1).coerceAtMost(
+                                    if (gmcCanTranslateSelected) GMC_SETTINGS_ROW_TRANSLATE else 2
+                                )
+                                true
+                            }
+                            Key.Enter, Key.DirectionCenter -> {
+                                gmcSubtitleSettingsAction(subtitleSettingsRow)
                                 true
                             }
                             Key.DirectionLeft -> {
@@ -4062,6 +4088,7 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
                                     0 -> subtitleSyncOffsetMs = (subtitleSyncOffsetMs + SUBTITLE_OFFSET_STEP_MS).coerceAtMost(MAX_SUBTITLE_OFFSET_MS)
                                     1 -> subtitleSizePct = (subtitleSizePct + 10).coerceAtMost(300)
                                     2 -> subtitleVerticalPct = (subtitleVerticalPct + 1).coerceAtMost(50)
+                                    else -> gmcSubtitleSettingsAction(subtitleSettingsRow)
                                 }
                                 true
                             }
@@ -5329,6 +5356,12 @@ private fun PlayerScreenContent(args: PlayerScreenArgs, viewModel: PlayerViewMod
             ) {
                 PlayerSubtitleSettingsPanel(
                     selectedRow = subtitleSettingsRow,
+                    gmcManualAi = gmcCanTranslateSelected,
+                    gmcSourceLabel = uiState.selectedSubtitle?.label.orEmpty(),
+                    onGmcAction = { row ->
+                        subtitleSettingsRow = row
+                        gmcSubtitleSettingsAction(row)
+                    },
                     syncOffsetMs = subtitleSyncOffsetMs,
                     sizePct = subtitleSizePct,
                     verticalPct = subtitleVerticalPct,
@@ -8003,6 +8036,9 @@ private object PlayerScreenRegexes {
 @Composable
 private fun PlayerSubtitleSettingsPanel(
     selectedRow: Int,
+    gmcManualAi: Boolean,
+    gmcSourceLabel: String,
+    onGmcAction: (Int) -> Unit,
     syncOffsetMs: Long,
     sizePct: Int,
     verticalPct: Int,
@@ -8061,7 +8097,58 @@ private fun PlayerSubtitleSettingsPanel(
             onDecrease = onVerticalDecrease,
             onIncrease = onVerticalIncrease
         )
+        if (gmcManualAi) {
+            Text(
+                text = "Μετάφραση AI από αυτόν",
+                style = ArflixTypography.label.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                modifier = Modifier.padding(top = 8.dp, start = 12.dp)
+            )
+            Text(
+                text = "Έλεγξε τον συγχρονισμό, διόρθωσε με την Καθυστέρηση και στείλ' τον.",
+                style = ArflixTypography.label.copy(fontWeight = FontWeight.Normal, fontSize = 11.sp),
+                color = Color.White.copy(alpha = 0.55f),
+                maxLines = 2,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+            GmcSubtitleActionRow("Έλεγχος στη μέση", selectedRow == GMC_SETTINGS_ROW_MIDDLE, accent) {
+                onGmcAction(GMC_SETTINGS_ROW_MIDDLE)
+            }
+            GmcSubtitleActionRow("Έλεγχος κοντά στο τέλος", selectedRow == GMC_SETTINGS_ROW_END, accent) {
+                onGmcAction(GMC_SETTINGS_ROW_END)
+            }
+            GmcSubtitleActionRow(
+                "Μετάφρασε «${gmcSourceLabel.take(28)}»",
+                selectedRow == GMC_SETTINGS_ROW_TRANSLATE,
+                accent
+            ) { onGmcAction(GMC_SETTINGS_ROW_TRANSLATE) }
+        }
     }
+}
+
+private const val GMC_SETTINGS_ROW_MIDDLE = 3
+private const val GMC_SETTINGS_ROW_END = 4
+private const val GMC_SETTINGS_ROW_TRANSLATE = 5
+
+/** GMC: a one-press action row in the subtitle settings panel (OK or → runs it). */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun GmcSubtitleActionRow(label: String, selected: Boolean, accent: Color, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = ArflixTypography.body.copy(fontWeight = FontWeight.Bold, fontSize = 14.sp),
+        color = if (selected) accent else Color.White,
+        maxLines = 1,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (selected) Color.White.copy(alpha = 0.08f) else Color.Transparent, RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    )
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
