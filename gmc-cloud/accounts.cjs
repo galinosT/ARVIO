@@ -175,6 +175,8 @@ function stripTrackerSignIns(payload, now = Date.now()) {
 
 /** Personal data that belongs to a person, not to a setup: it stays with the target account. */
 const PERSONAL_KEYS = ["watchlistByProfile", "watchlistChangesByProfile", "traktTokens", "traktExpiration"];
+/** Viewing history keys (localContinueWatchingByProfile, localWatched*): kept per person, never copied. */
+const PERSONAL_HISTORY = /^local(ContinueWatching|Watched)/;
 
 /**
  * The snapshot a copy writes: the source's settings, its active profile renamed to the target's
@@ -204,6 +206,21 @@ function copyPayload(source, current) {
   for (const k of PERSONAL_KEYS) {
     if (current && k in current) copy[k] = current[k];
     else delete copy[k];
+  }
+  // Viewing history is the person's too (continue watching, watched marks): the target keeps its
+  // own, the source's is never copied.
+  for (const k of Object.keys(copy)) {
+    if (!PERSONAL_HISTORY.test(k)) continue;
+    if (current && k in current) copy[k] = current[k];
+    else delete copy[k];
+  }
+  if (current) for (const k of Object.keys(current)) if (PERSONAL_HISTORY.test(k) && !(k in copy)) copy[k] = current[k];
+  // Field times of the source's other profiles have no data behind them in the copy.
+  if (mapped?.id && copy.fieldUpdatedAt && typeof copy.fieldUpdatedAt === "object") {
+    for (const k of Object.keys(copy.fieldUpdatedAt)) {
+      const m = /^[pc]:([^:]+):/.exec(k);
+      if (m && m[1] !== mapped.id) delete copy.fieldUpdatedAt[k];
+    }
   }
   copy.traktLinked = !!current?.traktLinked;
   // Tracker sign-ins (Simkl, MDBList) belong to the person: the source's are dropped (marked now,

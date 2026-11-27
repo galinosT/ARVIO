@@ -537,7 +537,11 @@ class CatalogRepository @Inject constructor(
                 prefs[key] != expected[key]
             }) return@edit
             // Initial automatic setup is not a user edit and must not outrank cloud choices.
-            val stampChange = expected == null || CatalogCloudFields.hasBaseline(prefs, profileId, "catalogsByProfile")
+            // GMC: nor is any later background refresh (preinstalled defaults, add-on rows): stamped
+            // "now", one that ran while a sync was applying newer rows from the cloud (an account
+            // copied from the GMC dashboard, Nov 2026) outranked them, and the box kept its default
+            // rows. Left unstamped, the change is still pushed — the next snapshot stamps it.
+            val stampChange = expected == null
             writeCatalogField(prefs, profileId, "catalogsByProfile", gson.toJson(sanitized), stampChange)
             saved = true
         }
