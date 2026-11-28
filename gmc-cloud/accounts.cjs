@@ -200,7 +200,8 @@ function copyPayload(source, current) {
     }
     const own = (copy.profiles || []).find((pr) => pr?.id === keep) || { id: keep };
     const avatarKeys = Object.keys(mapped).filter((k) => /avatar/i.test(k));
-    copy.profiles = [{ ...own, name: mapped.name, ...Object.fromEntries(avatarKeys.map((k) => [k, mapped[k]])) }];
+    const ownTimes = Object.fromEntries(["createdAt", "lastUsedAt", "updatedAt"].filter((k) => k in mapped).map((k) => [k, mapped[k]]));
+    copy.profiles = [{ ...own, name: mapped.name, ...Object.fromEntries(avatarKeys.map((k) => [k, mapped[k]])), ...ownTimes }];
     copy.activeProfileId = keep;
   }
   for (const k of PERSONAL_KEYS) {
@@ -215,10 +216,20 @@ function copyPayload(source, current) {
     else delete copy[k];
   }
   if (current) for (const k of Object.keys(current)) if (PERSONAL_HISTORY.test(k) && !(k in copy)) copy[k] = current[k];
+  // The target's own: its deleted-profile list and, per profile, its live-TV session (last and
+  // recent channels) — usage, like the viewing history.
+  if (current && "deletedProfileIds" in current) copy.deletedProfileIds = current.deletedProfileIds;
+  else delete copy.deletedProfileIds;
+  for (const [pid, st] of Object.entries(copy.iptvByProfile || {})) {
+    if (!st || typeof st !== "object") continue;
+    const own = current?.iptvByProfile?.[pid]?.tvSession;
+    if (own !== undefined) st.tvSession = own;
+    else delete st.tvSession;
+  }
   // Field times of the source's other profiles have no data behind them in the copy.
   if (mapped?.id && copy.fieldUpdatedAt && typeof copy.fieldUpdatedAt === "object") {
     for (const k of Object.keys(copy.fieldUpdatedAt)) {
-      const m = /^[pc]:([^:]+):/.exec(k);
+      const m = /^[pci]:([^:]+):/.exec(k);
       if (m && m[1] !== mapped.id) delete copy.fieldUpdatedAt[k];
     }
   }
